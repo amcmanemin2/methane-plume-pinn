@@ -1,0 +1,25 @@
+# Baseline configuration.
+#
+# The physics block is intentionally unset: the governing PDE, boundary and
+# initial conditions, and loss weighting are to be taken from Chapter 4 of the
+# Jia (2025) thesis rather than guessed. Fill these in before the first real run.
+
+run:
+  seed: 0
+  device: auto          # auto | cpu | cuda | mps
+
+domain: {}              # TODO(ch4): extent in x, y, z and the time window
+
+physics: {}             # TODO(ch4): wind field, diffusivity, source parameterisation
+
+network:
+  hidden_layers: [64, 64, 64, 64]
+  activation: tanh
+
+training:
+  iterations: 20000
+  optimizer: adam
+  learning_rate: 1.0e-3
+  collocation_points: 10000
+
+loss_weights: {}        # TODO(ch4): relative weights for PDE / data / BC / IC terms

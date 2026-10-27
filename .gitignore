@@ -1,0 +1,33 @@
+# Reference material (thesis PDF, proposal) — kept locally, not redistributed
+files/
+
+# Data — lives on Oak/Scratch, never in git
+data/
+*.nc
+*.h5
+*.hdf5
+*.npz
+
+# Run outputs
+runs/
+outputs/
+checkpoints/
+*.ckpt
+*.pt
+slurm-*.out
+wandb/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+*.egg-info/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Local Claude Code settings
+.claude/settings.local.json
