@@ -12,11 +12,15 @@
 set -euo pipefail
 
 # --- environment -------------------------------------------------------------
-# Verify the available module names on the cluster with `ml spider python`.
+# torch, numpy and scipy come from these modules (not from the venv), so they must be
+# loaded before activating it. Verify names with `ml spider <name>`.
 ml purge
-ml python/3.12.1
+ml math devel viz
+ml python/3.12.1 uv physics gdal/3.10.2 py-h5py/3.10.0_py312 py-mpi4py/4.0.3_py312 \
+   py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 py-scikit-image/0.24.0_py312 \
+   claude-code py-pytorch/2.4.1_py312
 
-source "${GROUP_HOME:-$HOME}/envs/pinn/bin/activate"
+source "$GROUP_HOME/envs/cee292_venv/bin/activate"
 
 # --- paths -------------------------------------------------------------------
 # Read data in place; write everything heavy to scratch.
