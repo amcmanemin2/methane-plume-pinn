@@ -1,0 +1,21 @@
+# Smoke test (< 5 min of training on one GPU, plus about 2 min data load). Overrides default.yaml.
+base: default.yaml
+
+data:
+  train_runs: [daytime_N]
+
+training:
+  steps: 300
+  n_data: 10000
+  n_collocation: 10000
+  n_ground: 10000
+  n_initial: 10000
+  n_val_points: 20000
+  n_pde_monitor: 5000
+  log_every: 25
+  val_every: 100
+
+evaluation:
+  stride: 4
+  n_combos: 2
+  n_combos_val: 2

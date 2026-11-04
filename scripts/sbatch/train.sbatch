@@ -12,15 +12,13 @@
 set -euo pipefail
 
 # --- environment -------------------------------------------------------------
-# torch, numpy and scipy come from these modules (not from the venv), so they must be
-# loaded before activating it. Verify names with `ml spider <name>`.
+# No venv: torch, numpy, scipy and matplotlib come from modules. Verify names with
+# `ml spider <name>`. Do not add gdal (not used, and it breaks the load after `ml purge`).
 ml purge
 ml math devel viz
-ml python/3.12.1 uv physics gdal/3.10.2 py-h5py/3.10.0_py312 py-mpi4py/4.0.3_py312 \
-   py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 py-scikit-image/0.24.0_py312 \
-   claude-code py-pytorch/2.4.1_py312
-
-source "$GROUP_HOME/envs/cee292_venv/bin/activate"
+ml python/3.12.1 physics py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 \
+   py-matplotlib/3.8.3_py312 py-pytorch/2.4.1_py312
+export PYTHONPATH="$PWD/src:$PYTHONPATH"   # package is not pip-installed; submit from the repo root
 
 # --- paths -------------------------------------------------------------------
 # Read data in place; write everything heavy to scratch.
@@ -34,4 +32,4 @@ mkdir -p "$PINN_RUN_ROOT"
 CONFIG="${1:-configs/default.yaml}"
 RUN_NAME="${2:-job-$SLURM_JOB_ID}"
 
-python scripts/train.py --config "$CONFIG" --run-name "$RUN_NAME"
+python3 scripts/train.py --config "$CONFIG" --run-name "$RUN_NAME"

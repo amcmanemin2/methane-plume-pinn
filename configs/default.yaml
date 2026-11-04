@@ -1,25 +1,58 @@
-# Baseline configuration.
-#
-# The physics block is intentionally unset: the governing PDE, boundary and
-# initial conditions, and loss weighting are to be taken from Chapter 4 of the
-# Jia (2025) thesis rather than guessed. Fill these in before the first real run.
+# Pit-2 methane PINN (PLAN.md). Physical units: m, s, kg, kg/h for emission rates.
 
 run:
   seed: 0
   device: auto          # auto | cpu | cuda | mps
 
-domain: {}              # TODO(ch4): extent in x, y, z and the time window
+data:
+  stride: 2             # horizontal stride for training data and wind (2 = 40 m)
+  train_runs: null      # null = the 12 training runs of PLAN.md §5; or a list such as [daytime_N]
+  plume_thresh: 1.0e-8  # kg/m3; cells whose single-source max exceeds this count as plume cells
 
-physics: {}             # TODO(ch4): wind field, diffusivity, source parameterisation
+physics:
+  c_ref: 1.0e-6         # kg/m3, concentration scale (about the RMS of the LES data points; network predicts c / c_ref via exp)
+  tau: 1.0              # s, time scale that makes the PDE residual dimensionless (tau / c_ref)
+  U_ref: 0.1            # m/s, scale of the ground-flux residual (c_ref * U_ref ~ K c / dz)
+  sigma_h: 10.0         # m, horizontal width of each Gaussian source (half the 20 m LES cell)
+  sigma_z: 5.0          # m, vertical width (half the first LES layer)
+  K_init: [10.0, 1.0]   # m2/s, initial K_h, K_z (trainable, one pair per stability class)
 
 network:
-  hidden_layers: [64, 64, 64, 64]
-  activation: tanh
+  hidden_size: 256
+  num_layers: 6
+  out_bias: auto        # auto = log(mean LES c on plume cells / c_ref), from training runs/combinations
 
 training:
-  iterations: 20000
-  optimizer: adam
-  learning_rate: 1.0e-3
-  collocation_points: 10000
+  # Jia (2025) §4.4: 100k collocation, boundary and IC points; up to 50k full-batch epochs;
+  # early stop at total loss 1e-3. Full time window (no Seq2Seq, PLAN.md §6). One epoch = one step.
+  steps: 50000
+  early_stop_loss: 1.0e-3  # Jia's threshold; not directly comparable here (our loss has a data term)
+  learning_rate: 1.0e-3    # Adam, default betas
+  final_lr: 1.0e-5         # exponential decay to this value over `steps`
+  clip_grad: 1.0
+  n_data: 100000        # LES data points per epoch
+  p_plume: 0.5          # share of data points drawn from cells the plume reaches
+  p_face: 0.1           # share drawn on the lateral/top crop faces (Dirichlet BC from LES)
+  n_collocation: 100000 # PDE points (R3 pool, resampled every epoch)
+  p_source: 0.2         # share of PDE/ground/IC points placed around active sources
+  n_ground: 100000
+  n_initial: 100000
+  n_val_points: 100000
+  n_pde_monitor: 20000  # fixed collocation points for an unbiased PDE-residual curve
+  profile_steps: 5
+  log_every: 100
+  val_every: 1000
 
-loss_weights: {}        # TODO(ch4): relative weights for PDE / data / BC / IC terms
+loss_weights:
+  auto: true            # w_i = |grad L_data| / |grad L_i| at epoch 1, then frozen (logged)
+  data: 1.0             # used only when auto is false
+  pde: 1.0
+  bc: 1.0
+  ic: 1.0
+  data_log: 0.1         # log-space part of the data term (fits the dilute plume edge)
+
+evaluation:
+  stride: 2             # metrics on the 40 m grid, all levels (figures use the full 20 m grid)
+  n_combos: 100         # test combinations per test run
+  n_combos_val: 200     # validation combinations per training run
+  batch: 262144

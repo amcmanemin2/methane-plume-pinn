@@ -21,6 +21,12 @@ def data_root() -> Path:
     return _from_env("PINN_DATA_ROOT", REPO_ROOT / "data")
 
 
+def les_root() -> Path:
+    """Raw FastEddy output trees (read-only). Default: $SCRATCH/fasteddy/aus/runs/muswellbrook."""
+    scratch = Path(os.environ.get("SCRATCH", str(Path.home())))
+    return _from_env("PINN_LES_ROOT", scratch / "fasteddy" / "aus" / "runs" / "muswellbrook")
+
+
 def run_root() -> Path:
     """Where checkpoints, logs and figures are written."""
     return _from_env("PINN_RUN_ROOT", REPO_ROOT / "runs")

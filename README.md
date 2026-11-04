@@ -49,23 +49,16 @@ Module and partition names change over time — confirm them with `ml spider pyt
 ```bash
 git clone <repo-url> && cd methane-plume-pinn
 
-# torch, numpy and scipy come from modules, not from the venv.
+# No venv: torch, numpy, scipy and matplotlib come from modules.
 ml purge
 ml math devel viz
-ml python/3.12.1 uv physics gdal/3.10.2 py-h5py/3.10.0_py312 py-mpi4py/4.0.3_py312 \
-   py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 py-scikit-image/0.24.0_py312 \
-   claude-code py-pytorch/2.4.1_py312
-export UV_PYTHON=$(which python3)
-
-uv venv $GROUP_HOME/envs/cee292_venv
-source $GROUP_HOME/envs/cee292_venv/bin/activate
-# Install only what the modules don't provide; --no-deps stops uv downloading torch.
-uv pip install "numpy==1.26.3" "scipy==1.12.0" pyyaml matplotlib pandas
-uv pip install --no-deps -e .
+ml python/3.12.1 physics py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 \
+   py-matplotlib/3.8.3_py312 py-pytorch/2.4.1_py312
+export PYTHONPATH="$PWD/src:$PYTHONPATH"   # the package is not pip-installed
 
 # Verify the environment on a dev node before queueing a real job.
 sh_dev
-python scripts/train.py --check-only
+python3 scripts/train.py --check-only
 ```
 
 Then submit with:
@@ -74,8 +67,7 @@ Then submit with:
 sbatch scripts/sbatch/train.sbatch configs/default.yaml my-run-name
 ```
 
-Build the environment on a login node, not a compute node — compute nodes have restricted
-outbound network access. Keep checkpoints on `$SCRATCH` and read data from `$OAK`; `$HOME`
+Keep checkpoints on `$SCRATCH` and read data from `$OAK`; `$HOME`
 has a small quota.
 
 ## Running locally
