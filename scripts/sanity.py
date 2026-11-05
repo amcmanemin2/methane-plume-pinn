@@ -3,6 +3,8 @@
 
     python3 scripts/sanity.py                       # all checks, GPU recommended
     python3 scripts/sanity.py --only norm les       # a subset: norm, les, overfit, timing
+    python3 scripts/sanity.py --only overfit --overfit-parts a --set training.clip_grad=null \
+        --note "overfit 4a without gradient clipping"
 
 Checks
     norm     input/output normalization and the size of each PDE term at initialization (units)
@@ -18,6 +20,7 @@ import argparse
 import copy
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -26,14 +29,14 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from train import load_config  # noqa: E402
+from train import append_runs_log, git_info, load_config  # noqa: E402
 
 from methane_pinn import data as D  # noqa: E402
 from methane_pinn import plots as P  # noqa: E402
 from methane_pinn import runs as R  # noqa: E402
 from methane_pinn.device import describe, resolve_device  # noqa: E402
 from methane_pinn.diagnostics import fit_K, les_pde_terms, residual_with_K  # noqa: E402
-from methane_pinn.evaluate import load_model  # noqa: E402
+from methane_pinn.evaluate import OVERFIT_PASS_REL_L2, far_field_mask, load_model, point_metrics  # noqa: E402
 from methane_pinn.paths import run_dir  # noqa: E402
 from methane_pinn.physics import source_term  # noqa: E402
 from methane_pinn.sampling import TrainSet  # noqa: E402
@@ -129,13 +132,15 @@ def check_les(cfg, log):
 
 
 # ---------------------------------------------------------------------------------------------
-def check_overfit(ts, cfg, root, log, steps_a=5000, steps_b=1000):
+def check_overfit(ts, cfg, root, log, steps_a=5000, steps_b=1000, parts=("a", "b")):
     """(a) data only, (b) all terms; 10 training combinations of one run, fixed data points."""
     out = {}
     table = D.combination_table(ts.runs[0], "train")[:10]
     ts.restrict_combinations(table)
     fixed = ts.fixed_data_points(200_000, seed=99, p_plume=0.5, p_face=0.1)
     for tag, data_only, steps in (("a_data_only", True, steps_a), ("b_all_terms", False, steps_b)):
+        if tag[0] not in parts:
+            continue
         c = copy.deepcopy(cfg)
         c["training"].update(steps=steps, val_every=max(steps // 10, 1), log_every=max(steps // 20, 1),
                              early_stop_loss=None, n_collocation=10000, n_ground=10000, n_initial=10000,
@@ -143,20 +148,37 @@ def check_overfit(ts, cfg, root, log, steps_a=5000, steps_b=1000):
         d = root / f"overfit_{tag}"
         t0 = time.time()
         model, L = train_pinn(ts, c, d, log=log, fixed_data=fixed, data_only=data_only)
-        m = evaluate_points(model, fixed)
         info = json.loads((d / "losses.json").read_text())["info"]
-        out[tag] = dict(steps=steps, wall_s=time.time() - t0, final=m, best_val=min(L["val_rmse"]),
+        crit = {}
+        for ck in ("last.pt", "best.pt"):
+            mk, _ = load_model(d / ck, ts.device)
+            crit[ck] = overfit_criterion(mk, ts, fixed)
+        out[tag] = dict(steps=steps, wall_s=time.time() - t0, metrics=crit, best_val=min(L["val_rmse"]),
                         last_terms={k: L[k][-1] for k in ("data", "pde", "bc", "ic")}, info=info,
-                        passed=bool(m["rel_l2"] < 0.05) if data_only else None)
+                        passed=bool(crit["best.pt"]["far_rel_l2"] < OVERFIT_PASS_REL_L2) if data_only else None)
         P.loss_curves(d, d / "loss_curves.png")
-        log(f"  overfit {tag}: relL2 {m['rel_l2']:.4f}  R2 {m['r2']:.5f}  ({time.time() - t0:.0f} s)", flush=True)
+        b = crit["best.pt"]
+        log(f"  overfit {tag} (best.pt): far-field relL2 {b['far_rel_l2']:.4f} (pass < {OVERFIT_PASS_REL_L2}), "
+            f"all-cells relL2 {b['all_rel_l2']:.4f}, median |dlog10| {b['log_median_abs_dlog10']:.3f}, "
+            f"within 2x {b['log_frac_within_2x']:.2%}  ({time.time() - t0:.0f} s)", flush=True)
     # the checkpoint carries the training-run met normalization
-    model, state = load_model(root / "overfit_a_data_only" / "best.pt", ts.device)
+    first = root / f"overfit_{'a_data_only' if 'a' in parts else 'b_all_terms'}" / "best.pt"
+    model, state = load_model(first, ts.device)
     out["ckpt_met_mean_matches_train"] = bool(np.allclose(model.met_mean.cpu().numpy(), ts.met_mean, rtol=1e-5))
     out["ckpt_runs"] = state["runs"]
     ts.q_pool = None
     ts.combos = [D.combination_table(r, "train") for r in ts.runs]
     return out
+
+
+@torch.no_grad()
+def overfit_criterion(model, ts, pts, batch=50000):
+    """Revised overfit criterion (TRAINING_LOG.md D1/E4): far-field + log-space + all-cells metrics."""
+    pred = torch.cat([model(pts["X"][i:i + batch], pts["q"][i:i + batch], pts["met"][i:i + batch])
+                      for i in range(0, len(pts["c"]), batch)]).cpu().numpy()
+    X = pts["X"].cpu().numpy()
+    far = far_field_mask(X[:, 0], X[:, 1], ts.src_xy)
+    return point_metrics(pred, pts["c"].cpu().numpy(), far)
 
 
 def check_timing(ts, cfg, root, log):
@@ -181,11 +203,21 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--only", nargs="*", default=["norm", "les", "overfit", "timing"])
+    p.add_argument("--overfit-parts", nargs="*", default=["a", "b"], help="a = data only, b = all terms")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override (YAML value)")
+    p.add_argument("--note", default="", help="what changed relative to the previous run (logged)")
+    p.add_argument("--name", default="sanity", help="suffix of the output directory")
     args = p.parse_args(argv)
-    cfg = load_config(args.config, [])
+    cfg = load_config(args.config, args.set)
     device = resolve_device(cfg["run"].get("device"))
-    root = run_dir(time.strftime("%Y%m%d-%H%M%S") + "_sanity")
-    report = dict(device=describe(device), config=args.config)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    root = run_dir(f"{stamp}_{args.name}")
+    git = git_info(root)
+    report = dict(device=describe(device), config=args.config, overrides=args.set, note=args.note,
+                  only=args.only, overfit_parts=args.overfit_parts, git=git["hash"], git_dirty=git["dirty"],
+                  jobid=os.environ.get("SLURM_JOB_ID", ""))
+    append_runs_log(dict(started=stamp, run_dir=root.name, jobid=report["jobid"], git=git["hash"],
+                         dirty=git["dirty"], config=args.config, overrides=" ".join(args.set), note=args.note))
 
     def log(*a, **k):
         print(*a, **{kk: v for kk, v in k.items() if kk != "flush"}, flush=True)
@@ -207,7 +239,7 @@ def main(argv=None):
             report["norm"] = check_norm(ts, cfg, log)
             save()
         if "overfit" in args.only:
-            report["overfit"] = check_overfit(ts, cfg, root, log)
+            report["overfit"] = check_overfit(ts, cfg, root, log, parts=args.overfit_parts)
             save()
         if "timing" in args.only:
             report["timing_full_jia_sizes"] = check_timing(ts, cfg, root, log)

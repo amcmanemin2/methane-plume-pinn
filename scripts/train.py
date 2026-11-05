@@ -74,6 +74,16 @@ def git_info(out_dir=None):
     return dict(hash=h, dirty=bool(diff.strip() or untracked), untracked=untracked)
 
 
+def scenario_rates(scen: dict):
+    """(15,) rates [kg/h] from a scenario block {run, rates: {source index: kg/h}}."""
+    import numpy as np
+    from methane_pinn import data as D
+    q = np.zeros(D.N_SRC)
+    for k, v in scen["rates"].items():
+        q[int(k)] = float(v)
+    return q
+
+
 def append_runs_log(row: dict):
     path = run_root() / "runs_log.csv"
     new = not path.exists()
@@ -126,7 +136,8 @@ def main(argv=None) -> int:
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = run_dir(f"{stamp}_{args.run_name}")
-    names = cfg["data"].get("train_runs")
+    scen = cfg.get("scenario")
+    names = [scen["run"]] if scen else cfg["data"].get("train_runs")
     train_runs = [R.get(n) for n in names] if names else R.runs("train")
     print(f"run dir    {out}\ntraining on {len(train_runs)} runs: {[r.name for r in train_runs]}", flush=True)
     git = git_info(out)
@@ -135,13 +146,23 @@ def main(argv=None) -> int:
                 overrides=args.set, config_file=args.config, started=stamp, seeds=all_seeds(cfg))
     (out / "config.yaml").write_text(yaml.safe_dump(cfg | {"meta": meta}, sort_keys=False))
     append_runs_log(dict(started=stamp, run_dir=out.name, jobid=meta["jobid"], git=git["hash"],
-                         dirty=git["dirty"], config=args.config, overrides=" ".join(args.set), note=args.note))
+                         dirty=git["dirty"], config=args.config, overrides=" ".join(args.set),
+                         note=(f"[scenario {cfg['scenario']}] " if scen else "") + args.note))
 
     t0 = time.time()
     ts = TrainSet(train_runs, stride=cfg["data"]["stride"], device=device,
                   sigma_h=cfg["physics"]["sigma_h"], sigma_z=cfg["physics"]["sigma_z"],
                   mask_thresh=cfg["data"].get("plume_thresh", 1e-8))
     print(f"data loaded in {time.time() - t0:.0f} s", flush=True)
+    if scen:     # one scenario (Jia): all data/physics points use this single rate vector
+        q = scenario_rates(scen)
+        ts.restrict_combinations(q[None])
+        sub = scen.get("subdomain")
+        if sub:      # Jia-sized box around the active sources (TRAINING_LOG.md S1a-3)
+            center = ts.src_xy[q > 0].mean(0)
+            dom = ts.set_subdomain(center, sub["half_width_m"], sub["top_agl_m"], sub["t_end_s"])
+            print(f"subdomain  {dom}  ({len(ts.cell_idx)} data cells, frames {ts.frames_default.tolist()})", flush=True)
+        print(f"scenario   {scen}", flush=True)
     model, losses = train_pinn(ts, cfg, out)
     info = json.loads((out / "losses.json").read_text())["info"]
     meta["result"] = dict(final_val_rmse=losses["val_rmse"][-1], final_val_r2=losses["val_r2"][-1],

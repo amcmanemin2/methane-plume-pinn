@@ -34,6 +34,7 @@ training:
   p_plume: 0.5          # share of data points drawn from cells the plume reaches
   p_face: 0.1           # share drawn on the lateral/top crop faces (Dirichlet BC from LES)
   n_collocation: 100000 # PDE points (R3 pool, resampled every epoch)
+  r3: true              # false = draw a fresh collocation set every epoch (TRAINING_LOG.md S1a-4)
   p_source: 0.2         # share of PDE/ground/IC points placed around active sources
   n_ground: 100000
   n_initial: 100000

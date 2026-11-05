@@ -66,7 +66,11 @@ def loss_curves(run_dir, path, smooth=50):
         ax.plot(step, raw, color=GRID, lw=0.8)
         ax.plot(step, sm(raw), color=CLASS_COLORS["daytime"], label="raw")
         ax.plot(step, sm(wtd), color=CLASS_COLORS["convective"], label="weighted")
-        ax.set_yscale("log")
+        if (raw > 0).any():
+            ax.set_yscale("log")
+        else:
+            ax.set_title(f"{title} (not used)", loc="left")
+            continue
         ax.set_title(title, loc="left")
         ax.set_xlabel("epoch")
     axes[0, 0].legend(fontsize=8)
@@ -167,6 +171,8 @@ def slice_maps(x, y, les, pinn, src_xy, path, title, sensors_xy=None, lidar_xy=N
                         mfc="none", mec=INK2, mew=0.8)
             if lidar_xy is not None:
                 ax.plot((lidar_xy[0] - cx) / 1e3, (lidar_xy[1] - cy) / 1e3, "s", ms=6, mfc="none", mec=INK, mew=1.0)
+            ax.set_xlim(ext[0], ext[1])
+            ax.set_ylim(ext[2], ext[3])
             ax.set_xlabel("x from pit-2 centre (km)")
             ax.set_ylabel("y (km)")
     return _save(fig, path)

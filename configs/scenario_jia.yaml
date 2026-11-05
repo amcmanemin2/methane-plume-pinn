@@ -1,0 +1,32 @@
+# Stage 1a (TRAINING_LOG.md, change of scope 2026-11-04): Jia's method on ONE scenario of our data.
+# One training run, one fixed source combination; network inputs (x, y, z_agl, t) only; loss = PDE +
+# ground zero-flux + IC with all weights 1 and NO data term (Jia eq. 4.6); K fixed per class (FD fits of
+# the LES snapshots, entry E1); LES wind in the PDE. The LES is used only for the scale c_ref, the output
+# bias, and monitoring/evaluation.
+base: default.yaml
+
+scenario:
+  run: daytime_N
+  rates: {7: 500.0}      # source index -> kg/h (single source; the field scales linearly with the rate)
+
+physics:
+  c_ref: auto            # = mean LES c on plume cells of this scenario (a scale only)
+  K_trainable: false
+  K_by_class:            # m2/s, (K_h, K_z): FD fit of the LES snapshots (TRAINING_LOG.md E1)
+    daytime: [19.0, 6.6]
+    convective: [1.1, 1.8]
+    stable: [2.4, 0.25]
+
+network:
+  inputs: coords         # (x, y, z_agl, t) only, as in Jia
+
+training:
+  best_metric: far_rel_l2   # best.pt by far-field relative L2 against the scenario's LES (monitoring)
+  n_val_points: 100000
+
+loss_weights:
+  auto: false
+  data: 0.0              # no data term (Jia)
+  pde: 1.0
+  bc: 1.0
+  ic: 1.0
