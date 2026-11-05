@@ -1,0 +1,97 @@
+run:
+  seed: 0
+  device: auto
+data:
+  stride: 2
+  train_runs:
+  - daytime_N
+  plume_thresh: 1.0e-08
+physics:
+  c_ref: 1.0e-06
+  tau: 1.0
+  U_ref: 0.1
+  sigma_h: 10.0
+  sigma_z: 5.0
+  K_init:
+  - 10.0
+  - 1.0
+network:
+  hidden_size: 256
+  num_layers: 6
+  out_bias: auto
+training:
+  steps: 300
+  early_stop_loss: 0.001
+  learning_rate: 0.001
+  final_lr: 1.0e-05
+  clip_grad: 1.0
+  n_data: 10000
+  p_plume: 0.5
+  p_face: 0.1
+  n_collocation: 10000
+  p_source: 0.2
+  n_ground: 10000
+  n_initial: 10000
+  n_val_points: 20000
+  n_pde_monitor: 5000
+  profile_steps: 5
+  log_every: 25
+  val_every: 100
+loss_weights:
+  auto: true
+  data: 1.0
+  pde: 1.0
+  bc: 1.0
+  ic: 1.0
+  data_log: 0.1
+evaluation:
+  stride: 4
+  n_combos: 2
+  n_combos_val: 2
+  batch: 262144
+meta:
+  git: e3475a9
+  git_dirty: true
+  jobid: '51102103'
+  device: 'cuda: NVIDIA A100-SXM4-80GB'
+  train_runs:
+  - daytime_N
+  note: 'smoke: first run with auto output bias + frozen grad-norm loss weights (2026-11-04
+    plan)'
+  overrides: []
+  config_file: configs/smoke.yaml
+  started: 20261104-123129
+  seeds:
+    run: 0
+    combination_splits:
+      train: 1
+      val: 2
+      test: 3
+    val_points: 12345
+    pde_monitor: 54321
+    output_bias: 777
+    sensors: 2026
+  result:
+    final_val_rmse: 0.0005957660485476008
+    final_val_r2: -400576.9598365266
+    load_s: 79
+    out_bias: -1.5088279569909193
+    weights:
+      data: 1.0
+      pde: 15337.266500782516
+      bc: 793740.0042193087
+      ic: 2.373130826779283
+    grad_norms_step1:
+      data: 2.893151913437559
+      pde: 0.00018863543339290274
+      bc: 3.644961697858669e-06
+      ic: 1.2191287057545106
+    profile_s_per_step:
+      sample: 0.020976787572726606
+      forward: 0.051433356991037724
+      backward: 0.05401700111106038
+      r3: 0.007732318807393312
+    peak_mem_GB: 1.986160128
+    stopped_early: false
+    steps_run: 300
+    wall_s: 41.581504344940186

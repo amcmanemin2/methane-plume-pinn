@@ -1,0 +1,415 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 0dcec46..2903e78 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -4,27 +4,43 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
+ 
+ ## Current state
+ 
+-The repository is a fresh start with no source code, build system, tests, or git history. Its only file is `Jia_dissertation_ch4.pdf`, the reference material for the project (course: CEE 292). There are no build, lint, or test commands yet. Add them here once a toolchain exists.
++The design is in `PLAN.md` (approved 2026-11-03; it records the decisions and the facts for the report). Implemented so far:
++- `src/methane_pinn/runs.py`: the 24 runs and the train/test split.
++- `extract.py`: raw LES to a cropped HDF5 file per run in `$OAK/anm49/methane-plume-pinn/data/les/`.
++- `data.py`: superposition, combination tables, and the virtual sensors and lidar.
++
++PINN: `physics.py` (terrain B-spline, LES wind interpolation, Gaussian sources, PDE/ground residuals), `model.py` (MLP with tanh and exp output), `sampling.py` (training points, R3 pool), `train.py`, `evaluate.py`, `plots.py`. The loss scales (`c_ref`, `tau`, `U_ref`, `loss_weights`) in `configs/default.yaml` are starting values. Tune them on the validation combinations only.
++
++Commands (after `export PYTHONPATH="$PWD/src:$PYTHONPATH"`):
++- Tests: `python3 -m unittest discover -s tests -v`. Set `PINN_DATA_ROOT` to a directory containing `les/*.h5` to run the file-based tests.
++- Extract all runs: `sbatch scripts/sbatch/extract.sbatch`. Existing files are skipped.
++- Quick extraction test: `python3 scripts/extract.py --run stable_N --frames 3 --out-dir $SCRATCH/methane-plume-pinn/test/les`.
++- pytest is not installed. Use `unittest`.
++- Sanity checks + smoke test (unit tests, `scripts/sanity.py`, `configs/smoke.yaml`, eval): `sbatch scripts/sbatch/sanity_smoke.sbatch`.
++- Train and evaluate on a GPU: `sbatch scripts/sbatch/train_gpu.sbatch <run-name> [--note "what changed"] [--set key=value ...]`. Outputs go to `$SCRATCH/methane-plume-pinn/runs/<YYYYmmdd-HHMMSS>_<run-name>/` (config.yaml with seeds/git, git.patch, losses.csv every epoch, best.pt, last.pt, eval/). Each run appends to `runs/runs_log.csv` there; `LATEST` names the newest run dir. Evaluation only: `python3 scripts/evaluate.py [--run-dir <dir>] [--splits val test]`.
++- Configs can start with `base: default.yaml` and override entries (see `configs/smoke.yaml`).
++- Change one thing between runs and say what with `--note`.
++- The `dev` partition rejects `sbatch` (interactive only). Use `-p gpu,serc`.
+ 
+ ## Python environment (Sherlock)
+ 
+-The venv is `$GROUP_HOME/envs/cee292_venv`, built with uv. torch, numpy and scipy are not installed in it. They come from Sherlock modules through `PYTHONPATH`, so the venv only works with those modules loaded.
++No venv for now: everything comes from Sherlock modules. torch, numpy, scipy and matplotlib are provided by modules through `PYTHONPATH`; pyyaml is bundled inside the pytorch module; pandas currently comes from the user install in `~/.local` (no module provides it).
+ 
+-Every Slurm script (and every interactive session) must load the modules before activating the venv:
++The default login shell already has the right modules loaded. In Slurm scripts, load them explicitly:
+ 
+ ```bash
+ ml purge
+ ml math devel viz
+-ml python/3.12.1 uv physics gdal/3.10.2 py-h5py/3.10.0_py312 py-mpi4py/4.0.3_py312 \
+-   py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 py-scikit-image/0.24.0_py312 \
+-   claude-code py-pytorch/2.4.1_py312
+-source "$GROUP_HOME/envs/cee292_venv/bin/activate"
++ml python/3.12.1 physics py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 \
++   py-matplotlib/3.8.3_py312 py-pytorch/2.4.1_py312
++export PYTHONPATH="$PWD/src:$PYTHONPATH"   # the package is not pip-installed
+ ```
+ 
+-- Use `python3`, not `python` (`/bin/python` is 2.7 on Sherlock). Check `python3 --version` prints 3.12.x after loading modules.
+-- Install with `uv pip install --no-deps -e .`. Never run a plain `uv pip install -e .` or `pip install -e .`: uv ignores the module packages and would download torch with several GB of CUDA wheels, and would pick numpy 2.x, which tries to compile from source on this old OS (glibc 2.17).
+-- Other new packages go in with `uv pip install <pkg>`, always together with the pins `"numpy==1.26.3" "scipy==1.12.0"` (the module versions). Check with `--dry-run` first. If a package has no wheel for this OS, pin it to an older version rather than letting uv compile it.
+-- uv's cache is on `$SCRATCH` (`UV_CACHE_DIR`), so it does not use `$HOME` quota; no need for `--no-cache`.
++- Use `python3`, not `python` (`/bin/python` is 2.7 on Sherlock). Check `python3 --version` prints 3.12.x.
++- Do not load `gdal/3.10.2` (not used here, and it fails to load after `ml purge`). When one module in an `ml` line fails, the whole line fails silently, so none of the later modules load. Check imports after loading.
++- Run the environment check with `PYTHONPATH="$PWD/src:$PYTHONPATH" python3 scripts/train.py --check-only`. Plain `PYTHONPATH=src` overwrites the module-provided PYTHONPATH, and h5py/torch then fail to import.
++- The `py-h5py/3.10.0_py312` module is needed for HDF5 I/O. Add it to `ml` lines in Slurm scripts.
++- Do not `pip install` / `uv pip install` anything without asking: uv ignores the module packages, would download torch with several GB of CUDA wheels, and picks numpy 2.x, which tries to compile from source on this old OS (glibc 2.17).
+ 
+ ## Project intent
+ 
+diff --git a/README.md b/README.md
+index 01b0e4d..6236454 100644
+--- a/README.md
++++ b/README.md
+@@ -49,23 +49,16 @@ Module and partition names change over time — confirm them with `ml spider pyt
+ ```bash
+ git clone <repo-url> && cd methane-plume-pinn
+ 
+-# torch, numpy and scipy come from modules, not from the venv.
++# No venv: torch, numpy, scipy and matplotlib come from modules.
+ ml purge
+ ml math devel viz
+-ml python/3.12.1 uv physics gdal/3.10.2 py-h5py/3.10.0_py312 py-mpi4py/4.0.3_py312 \
+-   py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 py-scikit-image/0.24.0_py312 \
+-   claude-code py-pytorch/2.4.1_py312
+-export UV_PYTHON=$(which python3)
+-
+-uv venv $GROUP_HOME/envs/cee292_venv
+-source $GROUP_HOME/envs/cee292_venv/bin/activate
+-# Install only what the modules don't provide; --no-deps stops uv downloading torch.
+-uv pip install "numpy==1.26.3" "scipy==1.12.0" pyyaml matplotlib pandas
+-uv pip install --no-deps -e .
++ml python/3.12.1 physics py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 \
++   py-matplotlib/3.8.3_py312 py-pytorch/2.4.1_py312
++export PYTHONPATH="$PWD/src:$PYTHONPATH"   # the package is not pip-installed
+ 
+ # Verify the environment on a dev node before queueing a real job.
+ sh_dev
+-python scripts/train.py --check-only
++python3 scripts/train.py --check-only
+ ```
+ 
+ Then submit with:
+@@ -74,8 +67,7 @@ Then submit with:
+ sbatch scripts/sbatch/train.sbatch configs/default.yaml my-run-name
+ ```
+ 
+-Build the environment on a login node, not a compute node — compute nodes have restricted
+-outbound network access. Keep checkpoints on `$SCRATCH` and read data from `$OAK`; `$HOME`
++Keep checkpoints on `$SCRATCH` and read data from `$OAK`; `$HOME`
+ has a small quota.
+ 
+ ## Running locally
+diff --git a/configs/default.yaml b/configs/default.yaml
+index 9c8f7f0..457656e 100644
+--- a/configs/default.yaml
++++ b/configs/default.yaml
+@@ -1,25 +1,58 @@
+-# Baseline configuration.
+-#
+-# The physics block is intentionally unset: the governing PDE, boundary and
+-# initial conditions, and loss weighting are to be taken from Chapter 4 of the
+-# Jia (2025) thesis rather than guessed. Fill these in before the first real run.
++# Pit-2 methane PINN (PLAN.md). Physical units: m, s, kg, kg/h for emission rates.
+ 
+ run:
+   seed: 0
+   device: auto          # auto | cpu | cuda | mps
+ 
+-domain: {}              # TODO(ch4): extent in x, y, z and the time window
++data:
++  stride: 2             # horizontal stride for training data and wind (2 = 40 m)
++  train_runs: null      # null = the 12 training runs of PLAN.md §5; or a list such as [daytime_N]
++  plume_thresh: 1.0e-8  # kg/m3; cells whose single-source max exceeds this count as plume cells
+ 
+-physics: {}             # TODO(ch4): wind field, diffusivity, source parameterisation
++physics:
++  c_ref: 1.0e-6         # kg/m3, concentration scale (about the RMS of the LES data points; network predicts c / c_ref via exp)
++  tau: 1.0              # s, time scale that makes the PDE residual dimensionless (tau / c_ref)
++  U_ref: 0.1            # m/s, scale of the ground-flux residual (c_ref * U_ref ~ K c / dz)
++  sigma_h: 10.0         # m, horizontal width of each Gaussian source (half the 20 m LES cell)
++  sigma_z: 5.0          # m, vertical width (half the first LES layer)
++  K_init: [10.0, 1.0]   # m2/s, initial K_h, K_z (trainable, one pair per stability class)
+ 
+ network:
+-  hidden_layers: [64, 64, 64, 64]
+-  activation: tanh
++  hidden_size: 256
++  num_layers: 6
++  out_bias: auto        # auto = log(mean LES c on plume cells / c_ref), from training runs/combinations
+ 
+ training:
+-  iterations: 20000
+-  optimizer: adam
+-  learning_rate: 1.0e-3
+-  collocation_points: 10000
++  # Jia (2025) §4.4: 100k collocation, boundary and IC points; up to 50k full-batch epochs;
++  # early stop at total loss 1e-3. Full time window (no Seq2Seq, PLAN.md §6). One epoch = one step.
++  steps: 50000
++  early_stop_loss: 1.0e-3  # Jia's threshold; not directly comparable here (our loss has a data term)
++  learning_rate: 1.0e-3    # Adam, default betas
++  final_lr: 1.0e-5         # exponential decay to this value over `steps`
++  clip_grad: 1.0
++  n_data: 100000        # LES data points per epoch
++  p_plume: 0.5          # share of data points drawn from cells the plume reaches
++  p_face: 0.1           # share drawn on the lateral/top crop faces (Dirichlet BC from LES)
++  n_collocation: 100000 # PDE points (R3 pool, resampled every epoch)
++  p_source: 0.2         # share of PDE/ground/IC points placed around active sources
++  n_ground: 100000
++  n_initial: 100000
++  n_val_points: 100000
++  n_pde_monitor: 20000  # fixed collocation points for an unbiased PDE-residual curve
++  profile_steps: 5
++  log_every: 100
++  val_every: 1000
+ 
+-loss_weights: {}        # TODO(ch4): relative weights for PDE / data / BC / IC terms
++loss_weights:
++  auto: true            # w_i = |grad L_data| / |grad L_i| at epoch 1, then frozen (logged)
++  data: 1.0             # used only when auto is false
++  pde: 1.0
++  bc: 1.0
++  ic: 1.0
++  data_log: 0.1         # log-space part of the data term (fits the dilute plume edge)
++
++evaluation:
++  stride: 2             # metrics on the 40 m grid, all levels (figures use the full 20 m grid)
++  n_combos: 100         # test combinations per test run
++  n_combos_val: 200     # validation combinations per training run
++  batch: 262144
+diff --git a/scripts/sbatch/train.sbatch b/scripts/sbatch/train.sbatch
+index 9320a83..43157ed 100644
+--- a/scripts/sbatch/train.sbatch
++++ b/scripts/sbatch/train.sbatch
+@@ -12,15 +12,13 @@
+ set -euo pipefail
+ 
+ # --- environment -------------------------------------------------------------
+-# torch, numpy and scipy come from these modules (not from the venv), so they must be
+-# loaded before activating it. Verify names with `ml spider <name>`.
++# No venv: torch, numpy, scipy and matplotlib come from modules. Verify names with
++# `ml spider <name>`. Do not add gdal (not used, and it breaks the load after `ml purge`).
+ ml purge
+ ml math devel viz
+-ml python/3.12.1 uv physics gdal/3.10.2 py-h5py/3.10.0_py312 py-mpi4py/4.0.3_py312 \
+-   py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 py-scikit-image/0.24.0_py312 \
+-   claude-code py-pytorch/2.4.1_py312
+-
+-source "$GROUP_HOME/envs/cee292_venv/bin/activate"
++ml python/3.12.1 physics py-scipy/1.12.0_py312 py-numpy/1.26.3_py312 \
++   py-matplotlib/3.8.3_py312 py-pytorch/2.4.1_py312
++export PYTHONPATH="$PWD/src:$PYTHONPATH"   # package is not pip-installed; submit from the repo root
+ 
+ # --- paths -------------------------------------------------------------------
+ # Read data in place; write everything heavy to scratch.
+@@ -34,4 +32,4 @@ mkdir -p "$PINN_RUN_ROOT"
+ CONFIG="${1:-configs/default.yaml}"
+ RUN_NAME="${2:-job-$SLURM_JOB_ID}"
+ 
+-python scripts/train.py --config "$CONFIG" --run-name "$RUN_NAME"
++python3 scripts/train.py --config "$CONFIG" --run-name "$RUN_NAME"
+diff --git a/scripts/train.py b/scripts/train.py
+index da372b1..3f0659f 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -1,41 +1,102 @@
+-#!/usr/bin/env python
+-"""Training entry point.
+-
+-The model itself is not implemented yet -- the PDE, boundary conditions and
+-loss terms come from Chapter 4 of the thesis. For now this verifies that the
+-environment is sound: torch imports, a device resolves, the configured paths
+-are reachable, and autograd produces correct derivatives (which is the one
+-capability a PINN cannot do without).
++#!/usr/bin/env python3
++"""Train the pit-2 methane PINN (PLAN.md).
++
++    python3 scripts/train.py --check-only                         # environment check only
++    python3 scripts/train.py --config configs/default.yaml --run-name base
++    python3 scripts/train.py --config configs/smoke.yaml --run-name smoke --note "first smoke test"
++
++Outputs (best.pt, last.pt, losses.csv, losses.json, config.yaml, git.patch) go to
++$PINN_RUN_ROOT/<YYYYmmdd-HHMMSS>_<run-name>/; every run appends a row to $PINN_RUN_ROOT/runs_log.csv.
+ """
+ 
+ import argparse
++import csv
++import json
++import os
++import subprocess
+ import sys
++import time
+ 
+ import torch
+ import yaml
+ 
++from methane_pinn import runs as R
+ from methane_pinn.device import describe, resolve_device
+-from methane_pinn.paths import data_root, run_dir, run_root
++from pathlib import Path
++
++from methane_pinn.paths import REPO_ROOT, data_root, run_dir, run_root
+ 
+ 
+ def parse_args(argv=None):
+-    parser = argparse.ArgumentParser(description=__doc__)
++    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     parser.add_argument("--config", default="configs/default.yaml")
+     parser.add_argument("--run-name", default="smoke")
+-    parser.add_argument(
+-        "--check-only",
+-        action="store_true",
+-        help="Run the environment check and exit without training.",
+-    )
++    parser.add_argument("--note", default="", help="what changed relative to the previous run (logged)")
++    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
++                        help="override a config entry, e.g. training.steps=500 (value parsed as YAML)")
++    parser.add_argument("--check-only", action="store_true",
++                        help="Run the environment check and exit without training.")
+     return parser.parse_args(argv)
+ 
+ 
+-def check_autograd(device: torch.device) -> float:
+-    """Second derivative of sin(x) should be -sin(x); report the max error.
++def load_config(path, sets):
++    """YAML config; a top-level `base:` key names a config file whose entries this one overrides."""
++    with open(path) as fh:
++        cfg = yaml.safe_load(fh) or {}
++    base = cfg.pop("base", None)
++    if base:
++        merged = load_config(Path(path).parent / base, [])
++        _deep_update(merged, cfg)
++        cfg = merged
++    return apply_overrides(cfg, sets)
++
++
++def _deep_update(a, b):
++    for k, v in b.items():
++        if isinstance(v, dict) and isinstance(a.get(k), dict):
++            _deep_update(a[k], v)
++        else:
++            a[k] = v
++
++
++def git_info(out_dir=None):
++    """Short hash and dirty flag; writes the uncommitted diff to out_dir/git.patch."""
++    def run(*args):
++        return subprocess.check_output(["git", *args], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL)
++    try:
++        h = run("rev-parse", "--short", "HEAD").strip()
++        diff = run("diff", "HEAD")
++        untracked = run("ls-files", "--others", "--exclude-standard").split()
++    except Exception:
++        return dict(hash="unknown", dirty=None)
++    if out_dir is not None:
++        (out_dir / "git.patch").write_text(diff)
++    return dict(hash=h, dirty=bool(diff.strip() or untracked), untracked=untracked)
++
++
++def append_runs_log(row: dict):
++    path = run_root() / "runs_log.csv"
++    new = not path.exists()
++    with open(path, "a", newline="") as fh:
++        w = csv.DictWriter(fh, fieldnames=list(row))
++        if new:
++            w.writeheader()
++        w.writerow(row)
++
++
++def apply_overrides(cfg, sets):
++    for item in sets:
++        key, val = item.split("=", 1)
++        node = cfg
++        *path, last = key.split(".")
++        for p in path:
++            node = node.setdefault(p, {})
++        node[last] = yaml.safe_load(val)
++    return cfg
++
+ 
+-    A PINN residual needs higher-order autograd on whichever device it runs on,
+-    and MPS in particular has historically been patchy about it.
+-    """
++def check_autograd(device: torch.device) -> float:
++    """Second derivative of sin(x) should be -sin(x); report the max error."""
+     x = torch.linspace(0.0, 3.14159, 128, device=device, requires_grad=True)
+     y = torch.sin(x).sum()
+     (dy,) = torch.autograd.grad(y, x, create_graph=True)
+@@ -45,30 +106,49 @@ def check_autograd(device: torch.device) -> float:
+ 
+ def main(argv=None) -> int:
+     args = parse_args(argv)
++    cfg = load_config(args.config, args.set)
+ 
+-    with open(args.config) as fh:
+-        config = yaml.safe_load(fh) or {}
+-
+-    torch.manual_seed(config.get("run", {}).get("seed", 0))
+-    device = resolve_device(config.get("run", {}).get("device"))
+-    out = run_dir(args.run_name)
+-
++    device = resolve_device(cfg.get("run", {}).get("device"))
+     print(f"torch      {torch.__version__}")
+     print(f"device     {describe(device)}")
+     print(f"data root  {data_root()}  (exists: {data_root().exists()})")
+     print(f"run root   {run_root()}")
+-    print(f"run dir    {out}")
+-
+     error = check_autograd(device)
+     print(f"autograd   second-derivative max error {error:.2e}")
+     if error > 1e-4:
+         print("FAIL: higher-order autograd is inaccurate on this device", file=sys.stderr)
+         return 1
+-
+     if args.check_only:
+         return 0
+ 
+-    print("\nEnvironment OK. Model not implemented yet -- see configs/default.yaml.")
++    from methane_pinn.sampling import TrainSet
++    from methane_pinn.train import all_seeds, train_pinn
++
++    stamp = time.strftime("%Y%m%d-%H%M%S")
++    out = run_dir(f"{stamp}_{args.run_name}")
++    names = cfg["data"].get("train_runs")
++    train_runs = [R.get(n) for n in names] if names else R.runs("train")
++    print(f"run dir    {out}\ntraining on {len(train_runs)} runs: {[r.name for r in train_runs]}", flush=True)
++    git = git_info(out)
++    meta = dict(git=git["hash"], git_dirty=git["dirty"], jobid=os.environ.get("SLURM_JOB_ID", ""),
++                device=describe(device), train_runs=[r.name for r in train_runs], note=args.note,
++                overrides=args.set, config_file=args.config, started=stamp, seeds=all_seeds(cfg))
++    (out / "config.yaml").write_text(yaml.safe_dump(cfg | {"meta": meta}, sort_keys=False))
++    append_runs_log(dict(started=stamp, run_dir=out.name, jobid=meta["jobid"], git=git["hash"],
++                         dirty=git["dirty"], config=args.config, overrides=" ".join(args.set), note=args.note))
++
++    t0 = time.time()
++    ts = TrainSet(train_runs, stride=cfg["data"]["stride"], device=device,
++                  sigma_h=cfg["physics"]["sigma_h"], sigma_z=cfg["physics"]["sigma_z"],
++                  mask_thresh=cfg["data"].get("plume_thresh", 1e-8))
++    print(f"data loaded in {time.time() - t0:.0f} s", flush=True)
++    model, losses = train_pinn(ts, cfg, out)
++    info = json.loads((out / "losses.json").read_text())["info"]
++    meta["result"] = dict(final_val_rmse=losses["val_rmse"][-1], final_val_r2=losses["val_r2"][-1],
++                          load_s=round(time.time() - t0 - info["wall_s"]), **info)
++    (out / "config.yaml").write_text(yaml.safe_dump(cfg | {"meta": meta}, sort_keys=False))
++    print(json.dumps(meta["result"], default=str))
++    (run_root() / "LATEST").write_text(out.name + "\n")
+     return 0
+ 
+ 
+diff --git a/src/methane_pinn/paths.py b/src/methane_pinn/paths.py
+index eb81412..a2404bb 100644
+--- a/src/methane_pinn/paths.py
++++ b/src/methane_pinn/paths.py
+@@ -21,6 +21,12 @@ def data_root() -> Path:
+     return _from_env("PINN_DATA_ROOT", REPO_ROOT / "data")
+ 
+ 
++def les_root() -> Path:
++    """Raw FastEddy output trees (read-only). Default: $SCRATCH/fasteddy/aus/runs/muswellbrook."""
++    scratch = Path(os.environ.get("SCRATCH", str(Path.home())))
++    return _from_env("PINN_LES_ROOT", scratch / "fasteddy" / "aus" / "runs" / "muswellbrook")
++
++
+ def run_root() -> Path:
+     """Where checkpoints, logs and figures are written."""
+     return _from_env("PINN_RUN_ROOT", REPO_ROOT / "runs")

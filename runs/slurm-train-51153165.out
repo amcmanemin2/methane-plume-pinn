@@ -1,0 +1,57 @@
+The following modules were not unloaded:
+  (Use "module --force purge" to unload all):
+
+  1) math   2) devel
+name, memory.total [MiB]
+NVIDIA A100-SXM4-40GB, 40960 MiB
+torch      2.4.0a0
+device     cuda: NVIDIA A100-SXM4-40GB
+data root  /oak/stanford/groups/abrandt/anm49/methane-plume-pinn/data  (exists: True)
+run root   /scratch/users/anm49/methane-plume-pinn/runs
+autograd   second-derivative max error 0.00e+00
+run dir    /scratch/users/anm49/methane-plume-pinn/runs/20261104-194232_S1a-3_daytime_N_src7_box1km
+training on 1 runs: ['daytime_N']
+  loaded daytime_N: basis 2.06 GB, plume cells 97528/1110000, 116 s
+data loaded in 117 s
+subdomain  {'x0': 5030.0, 'y0': 5250.0, 't0': 3600.0, 'Lx': 1000.0, 'Ly': 1000.0, 'Lz': 300.0, 'T': 600.0}  (21502 data cells, frames [0, 1, 2, 3, 4, 5])
+scenario   {'run': 'daytime_N', 'rates': {7: 500.0}, 'subdomain': {'half_width_m': 500, 'top_agl_m': 300, 't_end_s': 4200}}
+output bias set from training data: 0.000 (c0 = 1.524e-07 kg/m3)
+step       1  loss 1.933e+02  data 0.000e+00  pde 1.923e+02  bc 2.483e-03  ic 1.016e+00  |g| 8.82e+00  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 9.98e-05  0.517 s/step
+profile (s/step): {"sample": 0.0336, "forward": 0.0939, "backward": 0.1911, "r3": 0.015}  peak GPU mem 16.28 GB
+step     100  loss 6.189e+03  data 0.000e+00  pde 6.156e+03  bc 3.219e+01  ic 2.690e-07  |g| 4.34e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 7.94e-05  0.330 s/step
+step     200  loss 8.197e+03  data 0.000e+00  pde 8.173e+03  bc 2.432e+01  ic 5.382e-07  |g| 3.71e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 6.31e-05  0.327 s/step
+  val  rmse 3.592e-04 kg/m3  R2 -132140.4648  relL2 361.395  far relL2 1752.425  med|dlog10| 2.18  within2x 7%  pde(fixed pts) 5.189e+02
+step     300  loss 9.128e+03  data 0.000e+00  pde 9.084e+03  bc 4.403e+01  ic 4.439e-07  |g| 6.63e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 5.01e-05  0.327 s/step
+step     400  loss 9.526e+03  data 0.000e+00  pde 9.489e+03  bc 3.709e+01  ic 4.167e-07  |g| 5.68e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 3.98e-05  0.326 s/step
+  val  rmse 7.951e-04 kg/m3  R2 -647526.3186  relL2 800.002  far relL2 3893.872  med|dlog10| 2.95  within2x 3%  pde(fixed pts) 1.034e+03
+step     500  loss 9.371e+03  data 0.000e+00  pde 9.341e+03  bc 2.997e+01  ic 3.399e-07  |g| 5.23e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 3.16e-05  0.326 s/step
+step     600  loss 9.158e+03  data 0.000e+00  pde 9.131e+03  bc 2.644e+01  ic 5.630e-07  |g| 4.74e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 2.51e-05  0.325 s/step
+  val  rmse 1.314e-03 kg/m3  R2 -1768274.8150  relL2 1322.017  far relL2 6452.223  med|dlog10| 3.52  within2x 4%  pde(fixed pts) 1.214e+03
+step     700  loss 8.959e+03  data 0.000e+00  pde 8.931e+03  bc 2.848e+01  ic 4.640e-06  |g| 4.78e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 2.00e-05  0.325 s/step
+step     800  loss 8.475e+03  data 0.000e+00  pde 8.441e+03  bc 3.430e+01  ic 2.954e-04  |g| 5.19e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 1.58e-05  0.325 s/step
+  val  rmse 2.037e-03 kg/m3  R2 -4251115.8579  relL2 2049.810  far relL2 10005.960  med|dlog10| 3.93  within2x 0%  pde(fixed pts) 1.870e+03
+step     900  loss 7.533e+03  data 0.000e+00  pde 7.485e+03  bc 4.726e+01  ic 3.278e-01  |g| 5.84e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 1.26e-05  0.325 s/step
+step    1000  loss 6.735e+03  data 0.000e+00  pde 6.481e+03  bc 6.385e+01  ic 1.898e+02  |g| 7.88e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 1.00e-05  0.325 s/step
+  val  rmse 2.779e-03 kg/m3  R2 -7910055.3909  relL2 2796.095  far relL2 13647.382  med|dlog10| 4.20  within2x 0%  pde(fixed pts) 2.587e+03
+step    1100  loss 6.745e+03  data 0.000e+00  pde 6.496e+03  bc 7.014e+01  ic 1.785e+02  |g| 6.68e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 7.94e-06  0.325 s/step
+step    1200  loss 6.750e+03  data 0.000e+00  pde 6.492e+03  bc 7.318e+01  ic 1.851e+02  |g| 5.28e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 6.31e-06  0.325 s/step
+  val  rmse 2.963e-03 kg/m3  R2 -8989953.0742  relL2 2980.855  far relL2 14547.858  med|dlog10| 4.24  within2x 0%  pde(fixed pts) 2.942e+03
+step    1300  loss 6.746e+03  data 0.000e+00  pde 6.479e+03  bc 7.639e+01  ic 1.904e+02  |g| 4.12e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 5.01e-06  0.326 s/step
+step    1400  loss 6.746e+03  data 0.000e+00  pde 6.473e+03  bc 7.851e+01  ic 1.951e+02  |g| 3.31e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 3.98e-06  0.326 s/step
+  val  rmse 3.030e-03 kg/m3  R2 -9404642.4065  relL2 3048.831  far relL2 14879.070  med|dlog10| 4.26  within2x 0%  pde(fixed pts) 3.094e+03
+step    1500  loss 6.753e+03  data 0.000e+00  pde 6.476e+03  bc 7.936e+01  ic 1.979e+02  |g| 2.28e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 3.16e-06  0.326 s/step
+step    1600  loss 6.795e+03  data 0.000e+00  pde 6.515e+03  bc 8.104e+01  ic 1.994e+02  |g| 6.32e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 2.51e-06  0.326 s/step
+  val  rmse 3.075e-03 kg/m3  R2 -9687366.2070  relL2 3094.319  far relL2 15101.047  med|dlog10| 4.27  within2x 0%  pde(fixed pts) 3.205e+03
+step    1700  loss 6.892e+03  data 0.000e+00  pde 6.608e+03  bc 8.030e+01  ic 2.041e+02  |g| 4.93e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 2.00e-06  0.326 s/step
+step    1800  loss 6.976e+03  data 0.000e+00  pde 6.692e+03  bc 7.597e+01  ic 2.075e+02  |g| 4.30e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 1.58e-06  0.326 s/step
+  val  rmse 3.101e-03 kg/m3  R2 -9848163.0678  relL2 3119.894  far relL2 15226.331  med|dlog10| 4.27  within2x 0%  pde(fixed pts) 3.240e+03
+step    1900  loss 7.039e+03  data 0.000e+00  pde 6.751e+03  bc 7.474e+01  ic 2.129e+02  |g| 3.42e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 1.26e-06  0.326 s/step
+step    2000  loss 7.087e+03  data 0.000e+00  pde 6.800e+03  bc 7.072e+01  ic 2.165e+02  |g| 2.44e+04  K [19.0, 6.6, 1.1, 1.8, 2.4, 0.25]  lr 1.00e-06  0.326 s/step
+  val  rmse 3.150e-03 kg/m3  R2 -10159784.9528  relL2 3168.870  far relL2 15466.000  med|dlog10| 4.28  within2x 0%  pde(fixed pts) 3.311e+03
+{"final_val_rmse": 0.003149547479254052, "final_val_r2": -10159784.952799812, "load_s": 120, "out_bias": 0.0, "c_ref": 1.52434893152531e-07, "K_init": [[19.0, 6.6], [1.1, 1.8], [2.4, 0.25]], "K_trainable": false, "no_data_term": true, "best_metric": "far_rel_l2", "profile_s_per_step": {"sample": 0.03356786062940955, "forward": 0.09394306968897581, "backward": 0.1911127483472228, "r3": 0.014964406006038189}, "peak_mem_GB": 16.275396096, "stopped_early": false, "steps_run": 2000, "wall_s": 651.8718459606171}
+/scratch/users/anm49/methane-plume-pinn/runs/20261104-194232_S1a-3_daytime_N_src7_box1km: checkpoint step 200, val points {'rmse': 0.0003591909938902467, 'r2': -132140.4648170949, 'rel_l2': 361.39463115169707, 'all_rmse': 0.0003591909938902467, 'all_r2': -132140.4648170949, 'all_rel_l2': 361.39463115169707, 'all_n': 100000, 'far_rmse': 0.0003562003206581687, 'far_r2': -3198908.408793367, 'far_rel_l2': 1752.425190795055, 'far_n': 81180, 'log_median_abs_dlog10': 2.1772644247901285, 'log_frac_within_2x': 0.07179385003652786, 'log_n': 15057}, trained on ['daytime_N']
+[scenario] ['daytime_N'], 1 combinations, stride 2
+  daytime_N combo 1/1: mean R2 -245212.493  (0.2 s/combo)
+{'split': 'scenario', 'run': 'daytime_N', 'stab': 'daytime', 'bearing': 'N', 'snap_rmse': 0.00020434185995512835, 'snap_r2': -29.4638, 'snap_rel_l2': 5.5051, 'tmean_rmse': 0.00020400460700336379, 'tmean_r2': -88605.0566, 'tmean_rel_l2': 295.4225, 'sensor_rmse': 0.0003712549618136089, 'sensor_r2': -428457.0952, 'far_snap_rel_l2': 51.1118, 'far_snap_r2': -2683.2777, 'far_tmean_rel_l2': 1545.7938, 'far_tmean_r2': -2520425.3863, 'log_snap_med_dlog10': 1.7901, 'log_snap_within_2x': 0.0, 'log_tmean_med_dlog10': 3.158, 'log_tmean_within_2x': 0.0}
+maps scenario daytime_N: 1 sources, 500 kg/h
+wrote /scratch/users/anm49/methane-plume-pinn/runs/20261104-194232_S1a-3_daytime_N_src7_box1km/eval

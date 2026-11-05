@@ -1,0 +1,795 @@
+diff --git a/PLAN.md b/PLAN.md
+index f5a91ea..a24ef68 100644
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -200,3 +200,10 @@ Each training run saves its config, seed, git hash and job ID next to its output
+ 
+ ## Open items
+ None. All design choices are confirmed.
++
++## Amendment (2026-11-04): change of scope
++The sanity checks showed that the full surrogate of §3–§6 cannot be trained as set up: the MLP cannot overfit one run, and the PDE does not describe the LES (FD residual 0.86–0.98). Training now proceeds in stages that keep the PINN code:
++1. Jia's method per scenario (one training run + one source combination), first PDE-only, then with the data term.
++2. One PINN per run with 15 unit-source outputs (superposition).
++
++The met-sensor conditioning is a later extension. Evidence, decisions and every run are in `TRAINING_LOG.md`.
+diff --git a/scripts/evaluate.py b/scripts/evaluate.py
+index dd74f9a..16dc997 100644
+--- a/scripts/evaluate.py
++++ b/scripts/evaluate.py
+@@ -11,11 +11,14 @@ Writes <run dir>/eval/: metrics_val.csv, metrics_test.csv, eval_<split>_<run>.np
+ """
+ 
+ import argparse
++import sys
++from pathlib import Path
+ 
+ import h5py
+ import numpy as np
+ import torch
+ 
++sys.path.insert(0, str(Path(__file__).resolve().parent))
+ from methane_pinn import data as D
+ from methane_pinn import plots as P
+ from methane_pinn import runs as R
+@@ -39,25 +42,34 @@ def level_slice(les: D.LESRun, frames, q, height):
+     return ck * (1 - w) + ck1 * w
+ 
+ 
+-def maps_for_run(model, run, split, q, args, batch, device, ev_dir):
++def maps_for_run(model, run, split, q, args, batch, device, ev_dir, box=None):
+     les = D.LESRun.open(run)
+     g = les.grid
+     lay = D.sensor_layout(les)
+     met = torch.as_tensor(D.sensor_series(les, lay)["met"], device=device)
+     frames = np.arange(1, len(g["time"]))
++    xs, ys, topo = g["x"], g["y"], g["topo"]
++    if box is not None:       # sub-domain: its snapshots and its columns only
++        frames = frames[g["time"][frames] <= box["t0"] + box["T"] + 1e-6]
++        ix = np.flatnonzero((xs >= box["x0"]) & (xs <= box["x0"] + box["Lx"]))
++        iy = np.flatnonzero((ys >= box["y0"]) & (ys <= box["y0"] + box["Ly"]))
++        xs, ys, topo = xs[ix], ys[iy], topo[np.ix_(iy, ix)]
+     les_f = level_slice(les, frames, q, args.map_height)
+-    Xg, Yg = np.meshgrid(g["x"], g["y"])
+-    X = torch.as_tensor(np.stack([Xg.ravel(), Yg.ravel(), (g["topo"] + args.map_height).ravel(),
++    if box is not None:
++        les_f = les_f[:, iy][:, :, ix]
++    Xg, Yg = np.meshgrid(xs, ys)
++    X = torch.as_tensor(np.stack([Xg.ravel(), Yg.ravel(), (topo + args.map_height).ravel(),
+                                   np.zeros(Xg.size)], -1), dtype=torch.float32, device=device)
+     pinn_f = np.empty_like(les_f)
+     for jf, it in enumerate(frames):
+         X[:, 3] = float(g["time"][it])
+         pinn_f[jf] = predict_points(model, X, q, met[it].expand(len(X), -1), batch).reshape(Xg.shape)
+     on = np.flatnonzero(q > 0)
+-    P.slice_maps(g["x"], g["y"], [les_f[-1], les_f.mean(0)], [pinn_f[-1], pinn_f.mean(0)], g["src_xy"],
++    t_last = (g["time"][frames[-1]] - 3600.0) / 60.0
++    P.slice_maps(xs, ys, [les_f[-1], les_f.mean(0)], [pinn_f[-1], pinn_f.mean(0)], g["src_xy"],
+                  ev_dir / f"maps_{split}_{run.name}.png",
+-                 [f"{run.name} t = 60 min, {args.map_height:.0f} m AGL",
+-                  f"{run.name} release mean, {args.map_height:.0f} m AGL"],
++                 [f"{run.name} t = {t_last:.0f} min, {args.map_height:.0f} m AGL",
++                  f"{run.name} mean of evaluated snapshots, {args.map_height:.0f} m AGL"],
+                  sensors_xy=lay.xy, lidar_xy=lay.lidar_xy)
+     print(f"maps {split} {run.name}: {len(on)} sources, {q.sum():.0f} kg/h", flush=True)
+ 
+@@ -84,16 +96,23 @@ def main(argv=None):
+     batch = ev.get("batch", 262144)
+     print(f"{out}: checkpoint step {state['step']}, val points {state['val']}, trained on {trained_on}", flush=True)
+     ev_dir = out / "eval"
+-    for split in args.splits:
+-        if split == "val":
++    scen = state["cfg"].get("scenario")
++    splits = ["scenario"] if scen and args.splits == ["val", "test"] else args.splits
++    for split in splits:
++        combos, box = None, None
++        if split == "scenario":
++            from train import scenario_rates
++            runs, combos, n_combos = [R.get(scen["run"])], scenario_rates(scen)[None], 1
++            box = state["domain"] if scen.get("subdomain") else None
++        elif split == "val":
+             runs = [R.get(n) for n in (args.val_runs or trained_on)]
+             n_combos = args.n_combos or ev.get("n_combos_val", D.N_COMBOS["val"])
+         else:
+             runs = [R.get(n) for n in args.test_runs] if args.test_runs else R.runs("test")
+             n_combos = args.n_combos or ev.get("n_combos", D.N_COMBOS["test"])
+         print(f"[{split}] {[r.name for r in runs]}, {n_combos} combinations, stride {stride}", flush=True)
+-        results = [evaluate_run(model, r, n_combos, stride, batch, device, split=split, train_runs=trained_on)
+-                   for r in runs]
++        results = [evaluate_run(model, r, n_combos, stride, batch, device, split=split, train_runs=trained_on,
++                                combos=combos, box=box) for r in runs]
+         rows = save_results(results, ev_dir, tag=split)
+         for row in rows:
+             print({k: (round(v, 4) if isinstance(v, float) and abs(v) > 1e-3 else v) for k, v in row.items()})
+@@ -101,7 +120,8 @@ def main(argv=None):
+         P.sensor_parity(results, ev_dir / f"sensor_parity_{split}.png", title=f"Sensors, 10 m AGL ({split})")
+         P.field_parity(results, ev_dir / f"field_parity_{split}.png", title=f"Grid cells ({split})")
+         for run in runs:       # maps: first combination of the split, last snapshot and release mean
+-            maps_for_run(model, run, split, D.combination_table(run, split)[0], args, batch, device, ev_dir)
++            q = combos[0] if combos is not None else D.combination_table(run, split)[0]
++            maps_for_run(model, run, split, q, args, batch, device, ev_dir, box=box)
+     if (out / "losses.csv").exists():
+         P.loss_curves(out, ev_dir / "loss_curves.png")
+     print(f"wrote {ev_dir}")
+diff --git a/scripts/sanity.py b/scripts/sanity.py
+index e6be3e6..99954b0 100644
+--- a/scripts/sanity.py
++++ b/scripts/sanity.py
+@@ -3,6 +3,8 @@
+ 
+     python3 scripts/sanity.py                       # all checks, GPU recommended
+     python3 scripts/sanity.py --only norm les       # a subset: norm, les, overfit, timing
++    python3 scripts/sanity.py --only overfit --overfit-parts a --set training.clip_grad=null \
++        --note "overfit 4a without gradient clipping"
+ 
+ Checks
+     norm     input/output normalization and the size of each PDE term at initialization (units)
+@@ -18,6 +20,7 @@ import argparse
+ import copy
+ import json
+ import math
++import os
+ import sys
+ import time
+ from pathlib import Path
+@@ -26,14 +29,14 @@ import numpy as np
+ import torch
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
+-from train import load_config  # noqa: E402
++from train import append_runs_log, git_info, load_config  # noqa: E402
+ 
+ from methane_pinn import data as D  # noqa: E402
+ from methane_pinn import plots as P  # noqa: E402
+ from methane_pinn import runs as R  # noqa: E402
+ from methane_pinn.device import describe, resolve_device  # noqa: E402
+ from methane_pinn.diagnostics import fit_K, les_pde_terms, residual_with_K  # noqa: E402
+-from methane_pinn.evaluate import load_model  # noqa: E402
++from methane_pinn.evaluate import OVERFIT_PASS_REL_L2, far_field_mask, load_model, point_metrics  # noqa: E402
+ from methane_pinn.paths import run_dir  # noqa: E402
+ from methane_pinn.physics import source_term  # noqa: E402
+ from methane_pinn.sampling import TrainSet  # noqa: E402
+@@ -129,13 +132,15 @@ def check_les(cfg, log):
+ 
+ 
+ # ---------------------------------------------------------------------------------------------
+-def check_overfit(ts, cfg, root, log, steps_a=5000, steps_b=1000):
++def check_overfit(ts, cfg, root, log, steps_a=5000, steps_b=1000, parts=("a", "b")):
+     """(a) data only, (b) all terms; 10 training combinations of one run, fixed data points."""
+     out = {}
+     table = D.combination_table(ts.runs[0], "train")[:10]
+     ts.restrict_combinations(table)
+     fixed = ts.fixed_data_points(200_000, seed=99, p_plume=0.5, p_face=0.1)
+     for tag, data_only, steps in (("a_data_only", True, steps_a), ("b_all_terms", False, steps_b)):
++        if tag[0] not in parts:
++            continue
+         c = copy.deepcopy(cfg)
+         c["training"].update(steps=steps, val_every=max(steps // 10, 1), log_every=max(steps // 20, 1),
+                              early_stop_loss=None, n_collocation=10000, n_ground=10000, n_initial=10000,
+@@ -143,15 +148,22 @@ def check_overfit(ts, cfg, root, log, steps_a=5000, steps_b=1000):
+         d = root / f"overfit_{tag}"
+         t0 = time.time()
+         model, L = train_pinn(ts, c, d, log=log, fixed_data=fixed, data_only=data_only)
+-        m = evaluate_points(model, fixed)
+         info = json.loads((d / "losses.json").read_text())["info"]
+-        out[tag] = dict(steps=steps, wall_s=time.time() - t0, final=m, best_val=min(L["val_rmse"]),
++        crit = {}
++        for ck in ("last.pt", "best.pt"):
++            mk, _ = load_model(d / ck, ts.device)
++            crit[ck] = overfit_criterion(mk, ts, fixed)
++        out[tag] = dict(steps=steps, wall_s=time.time() - t0, metrics=crit, best_val=min(L["val_rmse"]),
+                         last_terms={k: L[k][-1] for k in ("data", "pde", "bc", "ic")}, info=info,
+-                        passed=bool(m["rel_l2"] < 0.05) if data_only else None)
++                        passed=bool(crit["best.pt"]["far_rel_l2"] < OVERFIT_PASS_REL_L2) if data_only else None)
+         P.loss_curves(d, d / "loss_curves.png")
+-        log(f"  overfit {tag}: relL2 {m['rel_l2']:.4f}  R2 {m['r2']:.5f}  ({time.time() - t0:.0f} s)", flush=True)
++        b = crit["best.pt"]
++        log(f"  overfit {tag} (best.pt): far-field relL2 {b['far_rel_l2']:.4f} (pass < {OVERFIT_PASS_REL_L2}), "
++            f"all-cells relL2 {b['all_rel_l2']:.4f}, median |dlog10| {b['log_median_abs_dlog10']:.3f}, "
++            f"within 2x {b['log_frac_within_2x']:.2%}  ({time.time() - t0:.0f} s)", flush=True)
+     # the checkpoint carries the training-run met normalization
+-    model, state = load_model(root / "overfit_a_data_only" / "best.pt", ts.device)
++    first = root / f"overfit_{'a_data_only' if 'a' in parts else 'b_all_terms'}" / "best.pt"
++    model, state = load_model(first, ts.device)
+     out["ckpt_met_mean_matches_train"] = bool(np.allclose(model.met_mean.cpu().numpy(), ts.met_mean, rtol=1e-5))
+     out["ckpt_runs"] = state["runs"]
+     ts.q_pool = None
+@@ -159,6 +171,16 @@ def check_overfit(ts, cfg, root, log, steps_a=5000, steps_b=1000):
+     return out
+ 
+ 
++@torch.no_grad()
++def overfit_criterion(model, ts, pts, batch=50000):
++    """Revised overfit criterion (TRAINING_LOG.md D1/E4): far-field + log-space + all-cells metrics."""
++    pred = torch.cat([model(pts["X"][i:i + batch], pts["q"][i:i + batch], pts["met"][i:i + batch])
++                      for i in range(0, len(pts["c"]), batch)]).cpu().numpy()
++    X = pts["X"].cpu().numpy()
++    far = far_field_mask(X[:, 0], X[:, 1], ts.src_xy)
++    return point_metrics(pred, pts["c"].cpu().numpy(), far)
++
++
+ def check_timing(ts, cfg, root, log):
+     """A few epochs at the full point counts of configs/default.yaml (Jia: 100k per term)."""
+     c = copy.deepcopy(cfg)
+@@ -181,11 +203,21 @@ def main(argv=None):
+     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     p.add_argument("--config", default="configs/default.yaml")
+     p.add_argument("--only", nargs="*", default=["norm", "les", "overfit", "timing"])
++    p.add_argument("--overfit-parts", nargs="*", default=["a", "b"], help="a = data only, b = all terms")
++    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override (YAML value)")
++    p.add_argument("--note", default="", help="what changed relative to the previous run (logged)")
++    p.add_argument("--name", default="sanity", help="suffix of the output directory")
+     args = p.parse_args(argv)
+-    cfg = load_config(args.config, [])
++    cfg = load_config(args.config, args.set)
+     device = resolve_device(cfg["run"].get("device"))
+-    root = run_dir(time.strftime("%Y%m%d-%H%M%S") + "_sanity")
+-    report = dict(device=describe(device), config=args.config)
++    stamp = time.strftime("%Y%m%d-%H%M%S")
++    root = run_dir(f"{stamp}_{args.name}")
++    git = git_info(root)
++    report = dict(device=describe(device), config=args.config, overrides=args.set, note=args.note,
++                  only=args.only, overfit_parts=args.overfit_parts, git=git["hash"], git_dirty=git["dirty"],
++                  jobid=os.environ.get("SLURM_JOB_ID", ""))
++    append_runs_log(dict(started=stamp, run_dir=root.name, jobid=report["jobid"], git=git["hash"],
++                         dirty=git["dirty"], config=args.config, overrides=" ".join(args.set), note=args.note))
+ 
+     def log(*a, **k):
+         print(*a, **{kk: v for kk, v in k.items() if kk != "flush"}, flush=True)
+@@ -207,7 +239,7 @@ def main(argv=None):
+             report["norm"] = check_norm(ts, cfg, log)
+             save()
+         if "overfit" in args.only:
+-            report["overfit"] = check_overfit(ts, cfg, root, log)
++            report["overfit"] = check_overfit(ts, cfg, root, log, parts=args.overfit_parts)
+             save()
+         if "timing" in args.only:
+             report["timing_full_jia_sizes"] = check_timing(ts, cfg, root, log)
+diff --git a/scripts/train.py b/scripts/train.py
+index 3f0659f..2bacb0d 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -74,6 +74,16 @@ def git_info(out_dir=None):
+     return dict(hash=h, dirty=bool(diff.strip() or untracked), untracked=untracked)
+ 
+ 
++def scenario_rates(scen: dict):
++    """(15,) rates [kg/h] from a scenario block {run, rates: {source index: kg/h}}."""
++    import numpy as np
++    from methane_pinn import data as D
++    q = np.zeros(D.N_SRC)
++    for k, v in scen["rates"].items():
++        q[int(k)] = float(v)
++    return q
++
++
+ def append_runs_log(row: dict):
+     path = run_root() / "runs_log.csv"
+     new = not path.exists()
+@@ -126,7 +136,8 @@ def main(argv=None) -> int:
+ 
+     stamp = time.strftime("%Y%m%d-%H%M%S")
+     out = run_dir(f"{stamp}_{args.run_name}")
+-    names = cfg["data"].get("train_runs")
++    scen = cfg.get("scenario")
++    names = [scen["run"]] if scen else cfg["data"].get("train_runs")
+     train_runs = [R.get(n) for n in names] if names else R.runs("train")
+     print(f"run dir    {out}\ntraining on {len(train_runs)} runs: {[r.name for r in train_runs]}", flush=True)
+     git = git_info(out)
+@@ -135,13 +146,23 @@ def main(argv=None) -> int:
+                 overrides=args.set, config_file=args.config, started=stamp, seeds=all_seeds(cfg))
+     (out / "config.yaml").write_text(yaml.safe_dump(cfg | {"meta": meta}, sort_keys=False))
+     append_runs_log(dict(started=stamp, run_dir=out.name, jobid=meta["jobid"], git=git["hash"],
+-                         dirty=git["dirty"], config=args.config, overrides=" ".join(args.set), note=args.note))
++                         dirty=git["dirty"], config=args.config, overrides=" ".join(args.set),
++                         note=(f"[scenario {cfg['scenario']}] " if scen else "") + args.note))
+ 
+     t0 = time.time()
+     ts = TrainSet(train_runs, stride=cfg["data"]["stride"], device=device,
+                   sigma_h=cfg["physics"]["sigma_h"], sigma_z=cfg["physics"]["sigma_z"],
+                   mask_thresh=cfg["data"].get("plume_thresh", 1e-8))
+     print(f"data loaded in {time.time() - t0:.0f} s", flush=True)
++    if scen:     # one scenario (Jia): all data/physics points use this single rate vector
++        q = scenario_rates(scen)
++        ts.restrict_combinations(q[None])
++        sub = scen.get("subdomain")
++        if sub:      # Jia-sized box around the active sources (TRAINING_LOG.md S1a-3)
++            center = ts.src_xy[q > 0].mean(0)
++            dom = ts.set_subdomain(center, sub["half_width_m"], sub["top_agl_m"], sub["t_end_s"])
++            print(f"subdomain  {dom}  ({len(ts.cell_idx)} data cells, frames {ts.frames_default.tolist()})", flush=True)
++        print(f"scenario   {scen}", flush=True)
+     model, losses = train_pinn(ts, cfg, out)
+     info = json.loads((out / "losses.json").read_text())["info"]
+     meta["result"] = dict(final_val_rmse=losses["val_rmse"][-1], final_val_r2=losses["val_r2"][-1],
+diff --git a/src/methane_pinn/evaluate.py b/src/methane_pinn/evaluate.py
+index a812102..b72189c 100644
+--- a/src/methane_pinn/evaluate.py
++++ b/src/methane_pinn/evaluate.py
+@@ -31,12 +31,43 @@ def load_model(ckpt_path, device="cpu"):
+     n_met = sd["met_mean"].numel()
+     net = cfg["network"]
+     model = PlumeModel(state["domain"], terrain, n_src=D.N_SRC, n_met=n_met, met_mean=np.zeros(n_met),
+-                       met_std=np.ones(n_met), q_max=D.Q_TOTAL_MAX_KGPH, c_ref=cfg["physics"]["c_ref"],
+-                       n_classes=len(STAB_INDEX), hidden_size=net["hidden_size"], num_layers=net["num_layers"])
++                       met_std=np.ones(n_met), q_max=D.Q_TOTAL_MAX_KGPH, c_ref=float(cfg["physics"]["c_ref"]),
++                       n_classes=len(STAB_INDEX), inputs=net.get("inputs", "full"),
++                       K_trainable=cfg["physics"].get("K_trainable", True),
++                       hidden_size=net["hidden_size"], num_layers=net["num_layers"])
+     model.load_state_dict(sd)
+     return model.to(device).eval(), state
+ 
+ 
++# Revised criterion (TRAINING_LOG.md, entry D1/E4): the near-source peak cells dominate linear metrics,
++# so every evaluation also reports the far field and a log-space fit, next to the PLAN.md metrics.
++NEAR_SOURCE_M = 100.0       # far field = horizontal distance > 100 m from every pit-2 source
++LOG_FLOOR = 1e-8            # kg m-3; log-space metrics on cells with LES c above this
++OVERFIT_PASS_REL_L2 = 0.05  # overfit test passes if far-field relative L2 < 0.05
++
++
++def far_field_mask(x, y, src_xy, radius=NEAR_SOURCE_M):
++    """True where the horizontal distance to every source exceeds `radius` (arrays of any shape)."""
++    x, y = np.asarray(x, float)[..., None], np.asarray(y, float)[..., None]
++    d = np.hypot(x - src_xy[:, 0], y - src_xy[:, 1]).min(-1)
++    return d > radius
++
++
++def point_metrics(pred, y, far):
++    """Metrics on a point set: all cells (PLAN.md), far field only, and log space (c > LOG_FLOOR)."""
++    pred, y = np.asarray(pred, float), np.asarray(y, float)
++    out = {}
++    for tag, m in (("all", np.ones_like(y, bool)), ("far", np.asarray(far, bool))):
++        sse, sst, syy, n = _stats(pred[m], y[m])
++        out.update({f"{tag}_{k}": float(v) for k, v in metrics_from_stats(sse, sst, syy, n).items()})
++        out[f"{tag}_n"] = int(m.sum())
++    pl = y > LOG_FLOOR
++    dl = np.abs(np.log10(np.maximum(pred[pl], 1e-30)) - np.log10(y[pl]))
++    out.update(log_median_abs_dlog10=float(np.median(dl)) if pl.any() else float("nan"),
++               log_frac_within_2x=float((dl < np.log10(2)).mean()) if pl.any() else float("nan"), log_n=int(pl.sum()))
++    return out
++
++
+ def _stats(pred, y):
+     """SSE, SST (about mean of y), sum(y^2), n for flat float64 arrays."""
+     d = pred - y
+@@ -65,15 +96,18 @@ def check_split(run: R.Run, split: str, train_runs=()):
+     """Leakage guard: test metrics only on test runs never trained on; val only on training runs."""
+     if split == "test" and (run.split != "test" or run.name in set(train_runs)):
+         raise ValueError(f"{run.name}: not a held-out test run (split={run.split}, trained on: {list(train_runs)})")
+-    if split == "val" and run.split != "train":
+-        raise ValueError(f"{run.name}: validation combinations exist only for training runs")
++    if split in ("val", "scenario") and run.split != "train":
++        raise ValueError(f"{run.name}: {split} evaluation is only for training runs")
+ 
+ 
+ @torch.no_grad()
+ def evaluate_run(model, run: R.Run, n_combos=100, stride=2, batch=262144, device="cpu", log=print,
+-                 split="test", train_runs=(), n_parity=50, seed=0):
++                 split="test", train_runs=(), n_parity=50, seed=0, combos=None, box=None):
+     """Metrics of one run against the superposed LES for the first n_combos combinations of `split`.
+ 
++    box: a sub-domain dict (x0, y0, Lx, Ly, Lz [m AGL], t0, T) as in TrainSet.set_subdomain; only grid
++    cells inside it and snapshots with t <= t0 + T are evaluated.
++
+     n_parity random grid cells per (combination, snapshot) are kept for field parity plots.
+     """
+     check_split(run, split, train_runs)
+@@ -82,12 +116,21 @@ def evaluate_run(model, run: R.Run, n_combos=100, stride=2, batch=262144, device
+     g = les.grid
+     layout = D.sensor_layout(les)
+     met_all = torch.as_tensor(D.sensor_series(les, layout)["met"], device=device)
+-    combos = D.combination_table(run, split)[:n_combos]
++    combos = D.combination_table(run, split)[:n_combos] if combos is None else np.atleast_2d(combos)
+     frames = np.arange(1, len(g["time"]))                          # t > 3600 s (release snapshots)
++    if box is not None:
++        frames = frames[g["time"][frames] <= box["t0"] + box["T"] + 1e-6]
+     s = stride
+     x, y, z = g["x"][::s], g["y"][::s], g["z"][:, ::s, ::s]
+     K, ny, nx = z.shape
+     Xg = np.stack(np.broadcast_arrays(x[None, None, :], y[None, :, None], z, 0.0), -1).reshape(-1, 4)
++    cells = np.arange(len(Xg))
++    if box is not None:
++        zagl = g["z_agl"][:, ::s, ::s].reshape(-1)
++        inb = ((Xg[:, 0] >= box["x0"]) & (Xg[:, 0] <= box["x0"] + box["Lx"]) & (Xg[:, 1] >= box["y0"])
++               & (Xg[:, 1] <= box["y0"] + box["Ly"]) & (zagl <= box["Lz"]))
++        cells = np.flatnonzero(inb)
++        Xg = Xg[cells]
+     X = torch.as_tensor(Xg, dtype=torch.float32, device=device)
+     with h5py.File(les.path, "r") as h:
+         basis = np.stack([h["c"][it, :, :, ::s, ::s] for it in frames])       # (F, S, K, ny, nx)
+@@ -107,6 +150,18 @@ def evaluate_run(model, run: R.Run, n_combos=100, stride=2, batch=262144, device
+     nC, nF = len(combos), len(frames)
+     acc = {k: np.zeros((nC, nF)) for k in ("sse", "sst", "syy", "n")}
+     tm = {k: np.zeros(nC) for k in ("sse", "sst", "syy", "n")}
++    far = far_field_mask(Xg[:, 0], Xg[:, 1], g["src_xy"])          # > 100 m from every source
++    acc_far = {k: np.zeros((nC, nF)) for k in ("sse", "sst", "syy", "n")}
++    tm_far = {k: np.zeros(nC) for k in ("sse", "sst", "syy", "n")}
++    log_med, log_2x = np.full((nC, nF), np.nan), np.full((nC, nF), np.nan)
++    tm_log_med, tm_log_2x = np.full(nC, np.nan), np.full(nC, np.nan)
++
++    def _log_fit(p, y):
++        pl = y > LOG_FLOOR
++        if not pl.any():
++            return np.nan, np.nan
++        dl = np.abs(np.log10(np.maximum(p[pl], 1e-30)) - np.log10(y[pl]))
++        return float(np.median(dl)), float((dl < np.log10(2)).mean())
+     sens_pred, sens_true = np.zeros((nC, nF, len(layout.cols))), np.zeros((nC, nF, len(layout.cols)))
+     par_pred, par_true = np.zeros((nC, nF, n_parity)), np.zeros((nC, nF, n_parity))
+     t0 = time.time()
+@@ -118,9 +173,12 @@ def evaluate_run(model, run: R.Run, n_combos=100, stride=2, batch=262144, device
+             X[:, 3] = t
+             met = met_all[it].expand(X.shape[0], -1)
+             p = predict_points(model, X, q, met, batch)
+-            yv = np.tensordot(w, basis[jf].reshape(D.N_SRC, -1), axes=1)
++            yv = np.tensordot(w, basis[jf].reshape(D.N_SRC, -1)[:, cells], axes=1)
+             for k, v in zip(("sse", "sst", "syy", "n"), _stats(p, yv)):
+                 acc[k][ic, jf] = v
++            for k, v in zip(("sse", "sst", "syy", "n"), _stats(p[far], yv[far])):
++                acc_far[k][ic, jf] = v
++            log_med[ic, jf], log_2x[ic, jf] = _log_fit(p, yv)
+             sel = prng.integers(0, len(p), n_parity)
+             par_pred[ic, jf], par_true[ic, jf] = p[sel], yv[sel]
+             sum_p += p
+@@ -130,6 +188,9 @@ def evaluate_run(model, run: R.Run, n_combos=100, stride=2, batch=262144, device
+             sens_true[ic, jf] = w @ sens_basis[jf]
+         for k, v in zip(("sse", "sst", "syy", "n"), _stats(sum_p / nF, sum_y / nF)):
+             tm[k][ic] = v
++        for k, v in zip(("sse", "sst", "syy", "n"), _stats((sum_p / nF)[far], (sum_y / nF)[far])):
++            tm_far[k][ic] = v
++        tm_log_med[ic], tm_log_2x[ic] = _log_fit(sum_p / nF, sum_y / nF)
+         if ic == 0 or (ic + 1) % 10 == 0:
+             m = metrics_from_stats(acc["sse"][ic], acc["sst"][ic], acc["syy"][ic], acc["n"][ic])
+             log(f"  {run.name} combo {ic + 1}/{nC}: mean R2 {np.nanmean(m['r2']):.3f}  "
+@@ -137,6 +198,8 @@ def evaluate_run(model, run: R.Run, n_combos=100, stride=2, batch=262144, device
+     return dict(run=run.name, stab=run.stab, bearing=run.bearing, split=split, combos=combos, times=g["time"][frames],
+                 par_pred=par_pred, par_true=par_true,
+                 **{f"snap_{k}": v for k, v in acc.items()}, **{f"tmean_{k}": v for k, v in tm.items()},
++                **{f"snapfar_{k}": v for k, v in acc_far.items()}, **{f"tmeanfar_{k}": v for k, v in tm_far.items()},
++                snap_log_med=log_med, snap_log_2x=log_2x, tmean_log_med=tm_log_med, tmean_log_2x=tm_log_2x,
+                 sens_pred=sens_pred, sens_true=sens_true, sens_xy=layout.xy, sens_near=layout.near)
+ 
+ 
+@@ -146,6 +209,8 @@ def summarize(results):
+     for r in results:
+         snap = metrics_from_stats(r["snap_sse"], r["snap_sst"], r["snap_syy"], r["snap_n"])
+         tmean = metrics_from_stats(r["tmean_sse"], r["tmean_sst"], r["tmean_syy"], r["tmean_n"])
++        snapf = metrics_from_stats(r["snapfar_sse"], r["snapfar_sst"], r["snapfar_syy"], r["snapfar_n"])
++        tmeanf = metrics_from_stats(r["tmeanfar_sse"], r["tmeanfar_sst"], r["tmeanfar_syy"], r["tmeanfar_n"])
+         sp, st = r["sens_pred"].ravel(), r["sens_true"].ravel()
+         sse, sst, syy, n = _stats(sp, st)
+         sens = metrics_from_stats(sse, sst, syy, n)
+@@ -154,7 +219,13 @@ def summarize(results):
+                          snap_rel_l2=float(np.nanmedian(snap["rel_l2"])),
+                          tmean_rmse=float(np.nanmean(tmean["rmse"])), tmean_r2=float(np.nanmedian(tmean["r2"])),
+                          tmean_rel_l2=float(np.nanmedian(tmean["rel_l2"])),
+-                         sensor_rmse=float(sens["rmse"]), sensor_r2=float(sens["r2"])))
++                         sensor_rmse=float(sens["rmse"]), sensor_r2=float(sens["r2"]),
++                         far_snap_rel_l2=float(np.nanmedian(snapf["rel_l2"])), far_snap_r2=float(np.nanmedian(snapf["r2"])),
++                         far_tmean_rel_l2=float(np.nanmedian(tmeanf["rel_l2"])), far_tmean_r2=float(np.nanmedian(tmeanf["r2"])),
++                         log_snap_med_dlog10=float(np.nanmedian(r["snap_log_med"])),
++                         log_snap_within_2x=float(np.nanmedian(r["snap_log_2x"])),
++                         log_tmean_med_dlog10=float(np.nanmedian(r["tmean_log_med"])),
++                         log_tmean_within_2x=float(np.nanmedian(r["tmean_log_2x"]))))
+     # pooled rows per stability class and overall (means of the per-run values)
+     for group in [*sorted({r["stab"] for r in rows}), "all"]:
+         sub = [r for r in rows if group == "all" or r["stab"] == group]
+diff --git a/src/methane_pinn/model.py b/src/methane_pinn/model.py
+index 19ded19..72c2d78 100644
+--- a/src/methane_pinn/model.py
++++ b/src/methane_pinn/model.py
+@@ -39,8 +39,14 @@ class PlumeModel(nn.Module):
+     """Wraps the PINN with coordinate scaling, terrain, conditioning inputs and the trainable K."""
+ 
+     def __init__(self, domain: dict, terrain: Terrain, n_src: int, n_met: int, met_mean, met_std,
+-                 q_max: float, c_ref: float, n_classes: int, K_init=(10.0, 1.0), **net_kw):
++                 q_max: float, c_ref: float, n_classes: int, K_init=(10.0, 1.0), inputs="full",
++                 K_trainable=True, **net_kw):
++        """inputs: "full" = coords + rates + met (surrogate); "coords" = (x, y, z_agl, t) only (one scenario,
++        as in Jia). K_init: one (K_h, K_z) pair for all classes, or a list with one pair per class."""
+         super().__init__()
++        if inputs not in ("full", "coords"):
++            raise ValueError(f"inputs must be 'full' or 'coords', got {inputs!r}")
++        self.inputs = inputs
+         self.terrain = terrain
+         d = domain
+         self.register_buffer("lo", torch.tensor([d["x0"], d["y0"], 0.0, d["t0"]], dtype=torch.float32))
+@@ -48,9 +54,11 @@ class PlumeModel(nn.Module):
+         self.register_buffer("met_mean", torch.as_tensor(met_mean, dtype=torch.float32))
+         self.register_buffer("met_std", torch.as_tensor(met_std, dtype=torch.float32))
+         self.q_max, self.c_ref = float(q_max), float(c_ref)
+-        self.net = PINN(4 + n_src + n_met, **net_kw)
++        self.net = PINN(4 + n_src + n_met if inputs == "full" else 4, **net_kw)
+         # log K_h, log K_z per stability class [m2 s-1]
+-        self.log_K = nn.Parameter(torch.log(torch.tensor([K_init] * n_classes, dtype=torch.float32)))
++        K = torch.as_tensor(K_init, dtype=torch.float32)
++        K = K.expand(n_classes, 2).clone() if K.ndim == 1 else K
++        self.log_K = nn.Parameter(torch.log(K), requires_grad=K_trainable)
+ 
+     def K(self, stab_idx):
+         """(K_h, K_z) per point for an (N,) tensor of stability-class indices."""
+@@ -64,6 +72,8 @@ class PlumeModel(nn.Module):
+         return (Xa - self.lo) / self.span - 0.5
+ 
+     def log_c_star(self, X, q, met):
++        if self.inputs == "coords":
++            return self.net(self.scaled_coords(X))
+         feats = torch.cat([self.scaled_coords(X), q / self.q_max, (met - self.met_mean) / self.met_std], dim=-1)
+         return self.net(feats)
+ 
+diff --git a/src/methane_pinn/plots.py b/src/methane_pinn/plots.py
+index 98dffc1..e382f85 100644
+--- a/src/methane_pinn/plots.py
++++ b/src/methane_pinn/plots.py
+@@ -66,7 +66,11 @@ def loss_curves(run_dir, path, smooth=50):
+         ax.plot(step, raw, color=GRID, lw=0.8)
+         ax.plot(step, sm(raw), color=CLASS_COLORS["daytime"], label="raw")
+         ax.plot(step, sm(wtd), color=CLASS_COLORS["convective"], label="weighted")
+-        ax.set_yscale("log")
++        if (raw > 0).any():
++            ax.set_yscale("log")
++        else:
++            ax.set_title(f"{title} (not used)", loc="left")
++            continue
+         ax.set_title(title, loc="left")
+         ax.set_xlabel("epoch")
+     axes[0, 0].legend(fontsize=8)
+@@ -167,6 +171,8 @@ def slice_maps(x, y, les, pinn, src_xy, path, title, sensors_xy=None, lidar_xy=N
+                         mfc="none", mec=INK2, mew=0.8)
+             if lidar_xy is not None:
+                 ax.plot((lidar_xy[0] - cx) / 1e3, (lidar_xy[1] - cy) / 1e3, "s", ms=6, mfc="none", mec=INK, mew=1.0)
++            ax.set_xlim(ext[0], ext[1])
++            ax.set_ylim(ext[2], ext[3])
+             ax.set_xlabel("x from pit-2 centre (km)")
+             ax.set_ylabel("y (km)")
+     return _save(fig, path)
+diff --git a/src/methane_pinn/sampling.py b/src/methane_pinn/sampling.py
+index 4214610..f3f0861 100644
+--- a/src/methane_pinn/sampling.py
++++ b/src/methane_pinn/sampling.py
+@@ -43,6 +43,9 @@ class TrainSet:
+         s = stride
+         self.x, self.y = g["x"][::s], g["y"][::s]
+         self.z = g["z"][:, ::s, ::s].astype(np.float32)               # (K, ny, nx)
++        self.z_agl = g["z_agl"][:, ::s, ::s].astype(np.float32)
++        self.cell_idx = None            # if set (sub-domain), data cells are drawn from these flat indices
++        self.frames_default = None      # if set (sub-domain), data frames are drawn from these
+         self.times = g["time"].astype(np.float64)
+         self.src_xy = g["src_xy"].astype(np.float32)
+         self.K, self.ny, self.nx = self.z.shape
+@@ -82,6 +85,30 @@ class TrainSet:
+         face = (i == 0) | (i == self.nx - 1) | (j == 0) | (j == self.ny - 1) | (k == self.K - 1)
+         self.face_idx = np.flatnonzero(face.ravel())
+ 
++    def set_subdomain(self, center_xy, half_width_m, top_agl_m, t_end_s):
++        """Restrict all points to a box around center_xy (Jia-sized sub-problem, TRAINING_LOG.md S1a-3).
++
++        Physics points: x, y within center +- half_width (clipped to the crop), z_agl in [0, top_agl_m],
++        t in [3600 s, t_end_s]. Data points: grid cells inside that box and frames with t <= t_end_s.
++        The model's input scaling follows self.domain, so it covers the box with [-0.5, 0.5].
++        """
++        cx, cy = map(float, center_xy)
++        x0, x1 = max(cx - half_width_m, self.x[0]), min(cx + half_width_m, self.x[-1])
++        y0, y1 = max(cy - half_width_m, self.y[0]), min(cy + half_width_m, self.y[-1])
++        t0 = float(self.times[0])
++        self.domain = dict(x0=x0, y0=y0, t0=t0, Lx=x1 - x0, Ly=y1 - y0, Lz=float(top_agl_m), T=float(t_end_s) - t0)
++        k, j, i = np.meshgrid(np.arange(self.K), np.arange(self.ny), np.arange(self.nx), indexing="ij")
++        inx = (self.x[i] >= x0) & (self.x[i] <= x1) & (self.y[j] >= y0) & (self.y[j] <= y1)
++        inside = inx & (self.z_agl <= top_agl_m)
++        self.cell_idx = np.flatnonzero(inside.ravel())
++        ii, jj = self.x[i], self.y[j]
++        dx = float(self.x[1] - self.x[0])
++        edge = (ii < x0 + dx) | (ii > x1 - dx) | (jj < y0 + dx) | (jj > y1 - dx) | (self.z_agl > top_agl_m - 2 * dx)
++        self.face_idx = np.flatnonzero((inside & edge).ravel())
++        self.plume_idx = [np.intersect1d(pi, self.cell_idx) for pi in self.plume_idx]
++        self.frames_default = np.flatnonzero(self.times <= t_end_s + 1e-6)
++        return self.domain
++
+     def restrict_combinations(self, table: np.ndarray):
+         """Use only these rate rows for data and physics points (overfit test)."""
+         self.q_pool = np.asarray(table, float)
+@@ -106,10 +133,13 @@ class TrainSet:
+         tables = self.combos if combos == "train" else \
+             [D.combination_table(r, "val") for r in self.runs] if combos == "val" else combos
+         run = rng.integers(0, len(self.runs), n)
+-        frames = np.arange(self.T) if frames is None else np.asarray(frames)
++        if frames is None:
++            frames = np.arange(self.T) if self.frames_default is None else self.frames_default
++        frames = np.asarray(frames)
+         it = rng.choice(frames, n)
+         u = rng.random(n)
+-        cell = rng.integers(0, self.K * self.ny * self.nx, n)
++        cell = rng.integers(0, self.K * self.ny * self.nx, n) if self.cell_idx is None else \
++            rng.choice(self.cell_idx, n)
+         cell = np.where(u < p_face, rng.choice(self.face_idx, n), cell)
+         q = np.empty((n, len(self.src_xy)))
+         c = np.empty(n)
+diff --git a/src/methane_pinn/train.py b/src/methane_pinn/train.py
+index d6e9c4c..26b6263 100644
+--- a/src/methane_pinn/train.py
++++ b/src/methane_pinn/train.py
+@@ -53,13 +53,32 @@ def all_seeds(cfg: dict) -> dict:
+                 pde_monitor=PDE_MONITOR_SEED, output_bias=BIAS_SEED, sensors=D.SENSOR_SEED)
+ 
+ 
++def K_init_of(phys: dict):
++    """(K_h, K_z) per class in STAB_INDEX order from physics.K_by_class, else K_init for all classes."""
++    by = phys.get("K_by_class")
++    if by:
++        return [list(map(float, by[s])) for s in STAB_INDEX]
++    return list(map(float, phys["K_init"]))
++
++
++@torch.no_grad()
++def plume_mean_c(ts: TrainSet, n=200_000) -> float:
++    """Mean LES c on plume cells of the training data (training runs and combinations only)."""
++    pts = ts.data_points(n, np.random.default_rng(BIAS_SEED), p_plume=1.0, p_face=0.0)
++    return float(pts["c"].clamp(min=0).mean())
++
++
+ def build_model(ts: TrainSet, cfg: dict) -> PlumeModel:
++    """PlumeModel from the config. physics.c_ref = auto resolves to plume_mean_c (written back to cfg)."""
+     net, phys = cfg["network"], cfg["physics"]
++    if phys.get("c_ref") == "auto":
++        phys["c_ref"] = plume_mean_c(ts)
+     out_bias = net.get("out_bias", "auto")
+     return PlumeModel(
+         ts.domain, ts.terrain, n_src=len(ts.src_xy), n_met=ts.met_t.shape[-1],
+         met_mean=ts.met_mean, met_std=ts.met_std, q_max=D.Q_TOTAL_MAX_KGPH,
+-        c_ref=phys["c_ref"], n_classes=len(STAB_INDEX), K_init=tuple(phys["K_init"]),
++        c_ref=float(phys["c_ref"]), n_classes=len(STAB_INDEX), K_init=K_init_of(phys),
++        inputs=net.get("inputs", "full"), K_trainable=phys.get("K_trainable", True),
+         hidden_size=net["hidden_size"], num_layers=net["num_layers"],
+         out_bias=0.0 if out_bias == "auto" else float(out_bias),
+     ).to(ts.device)
+@@ -68,9 +87,7 @@ def build_model(ts: TrainSet, cfg: dict) -> PlumeModel:
+ @torch.no_grad()
+ def init_output_bias(model: PlumeModel, ts: TrainSet, n=200_000) -> float:
+     """Set the last-layer bias to log(mean LES c on plume cells / c_ref) (training data only)."""
+-    pts = ts.data_points(n, np.random.default_rng(BIAS_SEED), p_plume=1.0, p_face=0.0)
+-    mean_c = float(pts["c"].clamp(min=0).mean())
+-    b = math.log(max(mean_c, 1e-30) / model.c_ref)
++    b = math.log(max(plume_mean_c(ts, n), 1e-30) / model.c_ref)
+     model.net.network[-1].bias.fill_(b)
+     return b
+ 
+@@ -130,6 +147,16 @@ def balance_weights(model, terms: dict) -> dict:
+ # ---------------------------------------------------------------------------------------------
+ 
+ @torch.no_grad()
++def val_metrics(model, ts, pts, batch=65536):
++    """All-cells (PLAN.md), far-field and log-space metrics on a fixed point set."""
++    from methane_pinn.evaluate import far_field_mask, point_metrics
++    pred = torch.cat([model(pts["X"][i:i + batch], pts["q"][i:i + batch], pts["met"][i:i + batch])
++                      for i in range(0, len(pts["c"]), batch)]).cpu().numpy()
++    X = pts["X"].cpu().numpy()
++    return point_metrics(pred, pts["c"].cpu().numpy(), far_field_mask(X[:, 0], X[:, 1], ts.src_xy))
++
++
++@torch.no_grad()
+ def evaluate_points(model, pts, batch=65536):
+     """RMSE [kg m-3], R^2 and relative L2 on a fixed point set."""
+     pred = torch.cat([model(pts["X"][i:i + batch], pts["q"][i:i + batch], pts["met"][i:i + batch])
+@@ -202,17 +229,24 @@ def train_pinn(ts: TrainSet, cfg: dict, out_dir: Path, log=print, fixed_data=Non
+     auto_w = bool(w_cfg.get("auto", False)) and not data_only
+     if data_only:
+         weights = dict(data=1.0, pde=0.0, bc=0.0, ic=0.0)
++    no_data = not auto_w and weights["data"] == 0.0       # Jia: PDE + ground + IC only
++    best_key = tr.get("best_metric", "all_rmse")          # lower is better
++    info["c_ref"], info["K_init"], info["K_trainable"] = model.c_ref, K_init_of(phys), model.log_K.requires_grad
++    info["no_data_term"], info["best_metric"] = no_data, best_key
+ 
+     out_dir.mkdir(parents=True, exist_ok=True)
++    # validation points: in scenario mode the scenario's own LES cells (monitoring only), else val combos
+     val = fixed_data if fixed_data is not None else \
+-        ts.data_points(tr["n_val_points"], np.random.default_rng(VAL_SEED), combos="val")
++        ts.data_points(tr["n_val_points"], np.random.default_rng(VAL_SEED),
++                       combos="train" if cfg.get("scenario") else "val")
+     mon = None if data_only else ts.collocation_points(tr.get("n_pde_monitor", 20000),
+                                                        np.random.default_rng(PDE_MONITOR_SEED),
+                                                        p_source=tr["p_source"])
+     pool = None if data_only else ts.collocation_points(tr["n_collocation"], rng, p_source=tr["p_source"])
+ 
+     losses = {k: [] for k in ("total", *TERMS)} | {"step": [], "val_step": [], "val_rmse": [], "val_r2": [],
+-                                                    "val_rel_l2": [], "pde_monitor": []}
++                                                    "val_rel_l2": [], "val_far_rel_l2": [], "val_log_dlog10": [],
++                                                    "pde_monitor": []}
+     csv_path = out_dir / "losses.csv"
+     K_names = [f"K{a}_{s}" for s in STAB_INDEX for a in ("h", "z")]
+     header = ["step", "total", *TERMS, *[f"w{k}_{k}" for k in TERMS], "lr", "grad_norm", *K_names, "s_per_step"]
+@@ -231,13 +265,13 @@ def train_pinn(ts: TrainSet, cfg: dict, out_dir: Path, log=print, fixed_data=Non
+             torch.cuda.reset_peak_memory_stats()
+         opt.zero_grad()
+         with timer("sample"):
+-            dpts = fixed_data if fixed_data is not None else \
++            dpts = None if no_data else fixed_data if fixed_data is not None else \
+                 ts.data_points(tr["n_data"], rng, p_plume=tr["p_plume"], p_face=tr["p_face"])
+             if not data_only:
+                 gpts = ts.ground_points(tr["n_ground"], rng, tr["p_source"])
+                 ipts = ts.initial_points(tr["n_initial"], rng, tr["p_source"])
+         with timer("forward"):
+-            terms = {"data": data_loss(model, dpts, w_log=w_log)}
++            terms = {"data": zero if no_data else data_loss(model, dpts, w_log=w_log)}
+             if not data_only:
+                 terms["pde"], r_abs = physics_loss(model, ts, pool, phys)
+                 terms["bc"] = boundary_loss(model, ts, gpts, phys)
+@@ -287,19 +321,23 @@ def train_pinn(ts: TrainSet, cfg: dict, out_dir: Path, log=print, fixed_data=Non
+                 f"{el / step:.3f} s/step", flush=True)
+         early = tr.get("early_stop_loss") and tot < tr["early_stop_loss"]
+         if step % tr["val_every"] == 0 or step == tr["steps"] or early:
+-            m = evaluate_points(model, val)
++            vm = val_metrics(model, ts, val)
++            m = dict(rmse=vm["all_rmse"], r2=vm["all_r2"], rel_l2=vm["all_rel_l2"], **vm)
+             pm = float("nan") if mon is None else pde_monitor(model, ts, mon, phys)
+             losses["val_step"].append(step)
+             for k in ("rmse", "r2", "rel_l2"):
+                 losses[f"val_{k}"].append(m[k])
++            losses["val_far_rel_l2"].append(vm["far_rel_l2"])
++            losses["val_log_dlog10"].append(vm["log_median_abs_dlog10"])
+             losses["pde_monitor"].append(pm)
+             log(f"  val  rmse {m['rmse']:.3e} kg/m3  R2 {m['r2']:.4f}  relL2 {m['rel_l2']:.3f}  "
+-                f"pde(fixed pts) {pm:.3e}", flush=True)
++                f"far relL2 {vm['far_rel_l2']:.3f}  med|dlog10| {vm['log_median_abs_dlog10']:.2f}  "
++                f"within2x {vm['log_frac_within_2x']:.0%}  pde(fixed pts) {pm:.3e}", flush=True)
+             state = dict(model=model.state_dict(), cfg=cfg, step=step, val=m, info=info,
+                          runs=[r.name for r in ts.runs], domain=ts.domain)
+             torch.save(state, out_dir / "last.pt")
+-            if m["rmse"] < best:
+-                best = m["rmse"]
++            if m[best_key] < best:
++                best = m[best_key]
+                 torch.save(state, out_dir / "best.pt")
+             (out_dir / "losses.json").write_text(json.dumps(losses | {"info": info}))
+         if early:
+diff --git a/tests/test_physics.py b/tests/test_physics.py
+index 9f6dbc4..f559b71 100644
+--- a/tests/test_physics.py
++++ b/tests/test_physics.py
+@@ -186,6 +186,35 @@ class TestFullModelResidual(unittest.TestCase):
+         self.assertGreater(scale, 0.0)
+ 
+ 
++class TestScenarioModel(unittest.TestCase):
++    """Stage 1 (Jia per scenario): coords-only inputs and fixed K."""
++
++    def _model(self, **kw):
++        x = np.arange(0, 400, 20.0)
++        terrain = Terrain(x, x, np.zeros((20, 20)))
++        dom = dict(x0=0.0, y0=0.0, t0=0.0, Lx=380.0, Ly=380.0, Lz=100.0, T=100.0)
++        return PlumeModel(dom, terrain, n_src=2, n_met=3, met_mean=np.zeros(3), met_std=np.ones(3), q_max=10.0,
++                          c_ref=1.0, n_classes=3, hidden_size=16, num_layers=2, **kw)
++
++    def test_coords_only_ignores_rates_and_met(self):
++        m = self._model(inputs="coords")
++        self.assertEqual(m.net.network[0].in_features, 4)
++        X = torch.tensor([[100.0, 50.0, 20.0, 30.0]])
++        a = m(X, torch.zeros(1, 2), torch.zeros(1, 3))
++        b = m(X, torch.full((1, 2), 7.0), torch.randn(1, 3))
++        self.assertEqual(float(a), float(b))
++        self.assertEqual(self._model().net.network[0].in_features, 4 + 2 + 3)
++
++    def test_fixed_K_per_class(self):
++        K = [[19.0, 6.6], [1.1, 1.8], [2.4, 0.25]]
++        m = self._model(K_init=K, K_trainable=False)
++        self.assertFalse(m.log_K.requires_grad)
++        Kh, Kz = m.K(torch.tensor([0, 1, 2]))
++        np.testing.assert_allclose(Kh.detach().numpy(), [19.0, 1.1, 2.4], rtol=1e-6)
++        np.testing.assert_allclose(Kz.detach().numpy(), [6.6, 1.8, 0.25], rtol=1e-6)
++        self.assertTrue(self._model(K_init=(10.0, 1.0)).log_K.requires_grad)
++
++
+ class TestWind(unittest.TestCase):
+     def test_exact_for_trilinear_field(self):
+         x, y = np.arange(0.0, 200.0, 20.0), np.arange(0.0, 160.0, 20.0)
+diff --git a/tests/test_splits.py b/tests/test_splits.py
+index 489ec5f..bb62282 100644
+--- a/tests/test_splits.py
++++ b/tests/test_splits.py
+@@ -36,6 +36,9 @@ class TestRunSplit(unittest.TestCase):
+             check_split(te, "val")
+         with self.assertRaises(ValueError):                      # a test run that was (wrongly) trained on
+             check_split(te, "test", train_runs=[te.name])
++        check_split(tr, "scenario", train_runs=[tr.name])       # stage 1 scenarios: training runs only
++        with self.assertRaises(ValueError):
++            check_split(te, "scenario")
+ 
+ 
+ class TestCombinationSplit(unittest.TestCase):
