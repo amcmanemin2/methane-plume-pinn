@@ -1,0 +1,54 @@
+{
+ "device": "cuda: NVIDIA A100-SXM4-40GB",
+ "config": "configs/default.yaml",
+ "overrides": [
+  "training.final_lr=1.0e-3"
+ ],
+ "note": "E3: overfit 4a, only change vs E1: constant LR 1e-3 (final_lr 1e-3); clip back at 1.0",
+ "only": [
+  "overfit"
+ ],
+ "overfit_parts": [
+  "a"
+ ],
+ "git": "602b0c6",
+ "git_dirty": true,
+ "jobid": "51114847",
+ "load_s_one_run": 139.5462760925293,
+ "overfit": {
+  "a_data_only": {
+   "steps": 5000,
+   "wall_s": 188.288094997406,
+   "final": {
+    "rmse": 8.747654507991718e-07,
+    "r2": 0.6882328719170643,
+    "rel_l2": 0.5559936901567494
+   },
+   "best_val": 7.384047991361033e-07,
+   "last_terms": {
+    "data": 0.8023871183395386,
+    "pde": 0.0,
+    "bc": 0.0,
+    "ic": 0.0
+   },
+   "info": {
+    "out_bias": -1.3005703046261665,
+    "profile_s_per_step": {
+     "sample": 1.5560165047645567e-05,
+     "forward": 0.015285451617091893,
+     "backward": 0.021654908545315266,
+     "r3": 1.3678055256605149e-05
+    },
+    "peak_mem_GB": 2.087692288,
+    "stopped_early": false,
+    "steps_run": 5000,
+    "wall_s": 183.87136125564575
+   },
+   "passed": false
+  },
+  "ckpt_met_mean_matches_train": true,
+  "ckpt_runs": [
+   "daytime_N"
+  ]
+ }
+}

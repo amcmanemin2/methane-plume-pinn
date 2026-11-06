@@ -200,3 +200,10 @@ Each training run saves its config, seed, git hash and job ID next to its output
 
 ## Open items
 None. All design choices are confirmed.
+
+## Amendment (2026-11-04): change of scope
+The sanity checks showed that the full surrogate of §3–§6 cannot be trained as set up: the MLP cannot overfit one run, and the PDE does not describe the LES (FD residual 0.86–0.98). Training now proceeds in stages that keep the PINN code:
+1. Jia's method per scenario (one training run + one source combination), first PDE-only, then with the data term.
+2. One PINN per run with 15 unit-source outputs (superposition).
+
+The met-sensor conditioning is a later extension. Evidence, decisions and every run are in `TRAINING_LOG.md`.

@@ -36,6 +36,9 @@ class TestRunSplit(unittest.TestCase):
             check_split(te, "val")
         with self.assertRaises(ValueError):                      # a test run that was (wrongly) trained on
             check_split(te, "test", train_runs=[te.name])
+        check_split(tr, "scenario", train_runs=[tr.name])       # stage 1 scenarios: training runs only
+        with self.assertRaises(ValueError):
+            check_split(te, "scenario")
 
 
 class TestCombinationSplit(unittest.TestCase):

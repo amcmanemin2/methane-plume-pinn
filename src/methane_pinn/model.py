@@ -39,8 +39,14 @@ class PlumeModel(nn.Module):
     """Wraps the PINN with coordinate scaling, terrain, conditioning inputs and the trainable K."""
 
     def __init__(self, domain: dict, terrain: Terrain, n_src: int, n_met: int, met_mean, met_std,
-                 q_max: float, c_ref: float, n_classes: int, K_init=(10.0, 1.0), **net_kw):
+                 q_max: float, c_ref: float, n_classes: int, K_init=(10.0, 1.0), inputs="full",
+                 K_trainable=True, **net_kw):
+        """inputs: "full" = coords + rates + met (surrogate); "coords" = (x, y, z_agl, t) only (one scenario,
+        as in Jia). K_init: one (K_h, K_z) pair for all classes, or a list with one pair per class."""
         super().__init__()
+        if inputs not in ("full", "coords"):
+            raise ValueError(f"inputs must be 'full' or 'coords', got {inputs!r}")
+        self.inputs = inputs
         self.terrain = terrain
         d = domain
         self.register_buffer("lo", torch.tensor([d["x0"], d["y0"], 0.0, d["t0"]], dtype=torch.float32))
@@ -48,9 +54,11 @@ class PlumeModel(nn.Module):
         self.register_buffer("met_mean", torch.as_tensor(met_mean, dtype=torch.float32))
         self.register_buffer("met_std", torch.as_tensor(met_std, dtype=torch.float32))
         self.q_max, self.c_ref = float(q_max), float(c_ref)
-        self.net = PINN(4 + n_src + n_met, **net_kw)
+        self.net = PINN(4 + n_src + n_met if inputs == "full" else 4, **net_kw)
         # log K_h, log K_z per stability class [m2 s-1]
-        self.log_K = nn.Parameter(torch.log(torch.tensor([K_init] * n_classes, dtype=torch.float32)))
+        K = torch.as_tensor(K_init, dtype=torch.float32)
+        K = K.expand(n_classes, 2).clone() if K.ndim == 1 else K
+        self.log_K = nn.Parameter(torch.log(K), requires_grad=K_trainable)
 
     def K(self, stab_idx):
         """(K_h, K_z) per point for an (N,) tensor of stability-class indices."""
@@ -64,6 +72,8 @@ class PlumeModel(nn.Module):
         return (Xa - self.lo) / self.span - 0.5
 
     def log_c_star(self, X, q, met):
+        if self.inputs == "coords":
+            return self.net(self.scaled_coords(X))
         feats = torch.cat([self.scaled_coords(X), q / self.q_max, (met - self.met_mean) / self.met_std], dim=-1)
         return self.net(feats)
 

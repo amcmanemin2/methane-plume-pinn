@@ -1,0 +1,117 @@
+run:
+  seed: 0
+  device: auto
+data:
+  stride: 2
+  train_runs: null
+  plume_thresh: 1.0e-08
+physics:
+  c_ref: 4.681093201952535e-08
+  tau: 1.0
+  U_ref: 0.1
+  sigma_h: 10.0
+  sigma_z: 5.0
+  K_init:
+  - 10.0
+  - 1.0
+  K_trainable: false
+  K_by_class:
+    daytime:
+    - 19.0
+    - 6.6
+    convective:
+    - 1.1
+    - 1.8
+    stable:
+    - 2.4
+    - 0.25
+network:
+  hidden_size: 256
+  num_layers: 6
+  out_bias: auto
+  inputs: coords
+training:
+  steps: 2000
+  early_stop_loss: 0.001
+  learning_rate: 0.0001
+  final_lr: 1.0e-06
+  clip_grad: 1.0
+  n_data: 100000
+  p_plume: 0.5
+  p_face: 0.1
+  n_collocation: 100000
+  p_source: 0.2
+  n_ground: 100000
+  n_initial: 100000
+  n_val_points: 100000
+  n_pde_monitor: 20000
+  profile_steps: 5
+  log_every: 100
+  val_every: 200
+  best_metric: far_rel_l2
+loss_weights:
+  auto: false
+  data: 0.0
+  pde: 1.0
+  bc: 1.0
+  ic: 1.0
+  data_log: 0.1
+evaluation:
+  stride: 2
+  n_combos: 100
+  n_combos_val: 200
+  batch: 262144
+scenario:
+  run: daytime_N
+  rates:
+    7: 500.0
+meta:
+  git: 602b0c6
+  git_dirty: true
+  jobid: '51148543'
+  device: 'cuda: NVIDIA A100-SXM4-80GB'
+  train_runs:
+  - daytime_N
+  note: 'S1a-2: only change vs S1a-1: LR 1e-4 -> 1e-6 (was 1e-3 -> 1e-5)'
+  overrides:
+  - training.steps=2000
+  - training.val_every=200
+  - training.learning_rate=1.0e-4
+  - training.final_lr=1.0e-6
+  config_file: configs/scenario_jia.yaml
+  started: 20261104-190713
+  seeds:
+    run: 0
+    combination_splits:
+      train: 1
+      val: 2
+      test: 3
+    val_points: 12345
+    pde_monitor: 54321
+    output_bias: 777
+    sensors: 2026
+  result:
+    final_val_rmse: 0.009089740153262575
+    final_val_r2: -1213818905.2938547
+    load_s: 84
+    out_bias: 0.0
+    c_ref: 4.681093201952535e-08
+    K_init:
+    - - 19.0
+      - 6.6
+    - - 1.1
+      - 1.8
+    - - 2.4
+      - 0.25
+    K_trainable: false
+    no_data_term: true
+    best_metric: far_rel_l2
+    profile_s_per_step:
+      sample: 0.027691248524934053
+      forward: 0.08467214368283749
+      backward: 0.16918633645400405
+      r3: 0.013068074081093072
+    peak_mem_GB: 16.275396096
+    stopped_early: false
+    steps_run: 2000
+    wall_s: 573.9664759635925

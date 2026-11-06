@@ -1,0 +1,54 @@
+{
+ "device": "cuda: NVIDIA A100-SXM4-80GB",
+ "config": "configs/default.yaml",
+ "overrides": [
+  "training.clip_grad=null"
+ ],
+ "note": "E2: overfit 4a, only change vs E1: gradient clipping off (clip_grad null)",
+ "only": [
+  "overfit"
+ ],
+ "overfit_parts": [
+  "a"
+ ],
+ "git": "602b0c6",
+ "git_dirty": true,
+ "jobid": "51113784",
+ "load_s_one_run": 85.99813580513,
+ "overfit": {
+  "a_data_only": {
+   "steps": 5000,
+   "wall_s": 175.28912663459778,
+   "final": {
+    "rmse": 1.628761282597481e-06,
+    "r2": -0.08084135314341934,
+    "rel_l2": 1.0352272086974734
+   },
+   "best_val": 1.5666752239540723e-06,
+   "last_terms": {
+    "data": 4.876944541931152,
+    "pde": 0.0,
+    "bc": 0.0,
+    "ic": 0.0
+   },
+   "info": {
+    "out_bias": -1.3005703046261665,
+    "profile_s_per_step": {
+     "sample": 1.3764388859272003e-05,
+     "forward": 0.01448741089552641,
+     "backward": 0.020366500411182643,
+     "r3": 1.1943932622671128e-05
+    },
+    "peak_mem_GB": 2.087692288,
+    "stopped_early": false,
+    "steps_run": 5000,
+    "wall_s": 172.1839816570282
+   },
+   "passed": false
+  },
+  "ckpt_met_mean_matches_train": true,
+  "ckpt_runs": [
+   "daytime_N"
+  ]
+ }
+}

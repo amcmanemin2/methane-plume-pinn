@@ -1,0 +1,2 @@
+split,run,stab,bearing,snap_rmse,snap_r2,snap_rel_l2,tmean_rmse,tmean_r2,tmean_rel_l2,sensor_rmse,sensor_r2
+test,daytime_NE,daytime,NE,0.000845829,-0.00654986,1.00055,0.000844447,-1.10641e+07,2881.83,0.00320166,-314033

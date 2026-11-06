@@ -186,6 +186,35 @@ class TestFullModelResidual(unittest.TestCase):
         self.assertGreater(scale, 0.0)
 
 
+class TestScenarioModel(unittest.TestCase):
+    """Stage 1 (Jia per scenario): coords-only inputs and fixed K."""
+
+    def _model(self, **kw):
+        x = np.arange(0, 400, 20.0)
+        terrain = Terrain(x, x, np.zeros((20, 20)))
+        dom = dict(x0=0.0, y0=0.0, t0=0.0, Lx=380.0, Ly=380.0, Lz=100.0, T=100.0)
+        return PlumeModel(dom, terrain, n_src=2, n_met=3, met_mean=np.zeros(3), met_std=np.ones(3), q_max=10.0,
+                          c_ref=1.0, n_classes=3, hidden_size=16, num_layers=2, **kw)
+
+    def test_coords_only_ignores_rates_and_met(self):
+        m = self._model(inputs="coords")
+        self.assertEqual(m.net.network[0].in_features, 4)
+        X = torch.tensor([[100.0, 50.0, 20.0, 30.0]])
+        a = m(X, torch.zeros(1, 2), torch.zeros(1, 3))
+        b = m(X, torch.full((1, 2), 7.0), torch.randn(1, 3))
+        self.assertEqual(float(a), float(b))
+        self.assertEqual(self._model().net.network[0].in_features, 4 + 2 + 3)
+
+    def test_fixed_K_per_class(self):
+        K = [[19.0, 6.6], [1.1, 1.8], [2.4, 0.25]]
+        m = self._model(K_init=K, K_trainable=False)
+        self.assertFalse(m.log_K.requires_grad)
+        Kh, Kz = m.K(torch.tensor([0, 1, 2]))
+        np.testing.assert_allclose(Kh.detach().numpy(), [19.0, 1.1, 2.4], rtol=1e-6)
+        np.testing.assert_allclose(Kz.detach().numpy(), [6.6, 1.8, 0.25], rtol=1e-6)
+        self.assertTrue(self._model(K_init=(10.0, 1.0)).log_K.requires_grad)
+
+
 class TestWind(unittest.TestCase):
     def test_exact_for_trilinear_field(self):
         x, y = np.arange(0.0, 200.0, 20.0), np.arange(0.0, 160.0, 20.0)

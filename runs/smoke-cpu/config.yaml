@@ -1,0 +1,52 @@
+run:
+  seed: 0
+  device: auto
+data:
+  stride: 4
+  train_runs:
+  - daytime_N
+  plume_thresh: 1.0e-08
+physics:
+  c_ref: 1.0e-06
+  tau: 10.0
+  U_ref: 0.1
+  sigma_h: 10.0
+  sigma_z: 5.0
+  K_init:
+  - 10.0
+  - 1.0
+network:
+  hidden_size: 64
+  num_layers: 4
+  out_bias: -5.0
+training:
+  steps: 40
+  learning_rate: 0.001
+  final_lr: 1.0e-05
+  clip_grad: 1.0
+  n_data: 512
+  p_plume: 0.5
+  p_face: 0.1
+  n_collocation: 512
+  p_source: 0.2
+  n_ground: 256
+  n_initial: 256
+  n_val_points: 2000
+  log_every: 10
+  val_every: 20
+loss_weights:
+  data: 1.0
+  data_log: 0.1
+  pde: 1.0
+  bc: 1.0
+  ic: 1.0
+evaluation:
+  stride: 2
+  n_combos: 100
+  batch: 262144
+meta:
+  git: e3475a9
+  jobid: '50963994'
+  device: cpu
+  train_runs:
+  - daytime_N

@@ -43,6 +43,9 @@ class TrainSet:
         s = stride
         self.x, self.y = g["x"][::s], g["y"][::s]
         self.z = g["z"][:, ::s, ::s].astype(np.float32)               # (K, ny, nx)
+        self.z_agl = g["z_agl"][:, ::s, ::s].astype(np.float32)
+        self.cell_idx = None            # if set (sub-domain), data cells are drawn from these flat indices
+        self.frames_default = None      # if set (sub-domain), data frames are drawn from these
         self.times = g["time"].astype(np.float64)
         self.src_xy = g["src_xy"].astype(np.float32)
         self.K, self.ny, self.nx = self.z.shape
@@ -82,6 +85,30 @@ class TrainSet:
         face = (i == 0) | (i == self.nx - 1) | (j == 0) | (j == self.ny - 1) | (k == self.K - 1)
         self.face_idx = np.flatnonzero(face.ravel())
 
+    def set_subdomain(self, center_xy, half_width_m, top_agl_m, t_end_s):
+        """Restrict all points to a box around center_xy (Jia-sized sub-problem, TRAINING_LOG.md S1a-3).
+
+        Physics points: x, y within center +- half_width (clipped to the crop), z_agl in [0, top_agl_m],
+        t in [3600 s, t_end_s]. Data points: grid cells inside that box and frames with t <= t_end_s.
+        The model's input scaling follows self.domain, so it covers the box with [-0.5, 0.5].
+        """
+        cx, cy = map(float, center_xy)
+        x0, x1 = max(cx - half_width_m, self.x[0]), min(cx + half_width_m, self.x[-1])
+        y0, y1 = max(cy - half_width_m, self.y[0]), min(cy + half_width_m, self.y[-1])
+        t0 = float(self.times[0])
+        self.domain = dict(x0=x0, y0=y0, t0=t0, Lx=x1 - x0, Ly=y1 - y0, Lz=float(top_agl_m), T=float(t_end_s) - t0)
+        k, j, i = np.meshgrid(np.arange(self.K), np.arange(self.ny), np.arange(self.nx), indexing="ij")
+        inx = (self.x[i] >= x0) & (self.x[i] <= x1) & (self.y[j] >= y0) & (self.y[j] <= y1)
+        inside = inx & (self.z_agl <= top_agl_m)
+        self.cell_idx = np.flatnonzero(inside.ravel())
+        ii, jj = self.x[i], self.y[j]
+        dx = float(self.x[1] - self.x[0])
+        edge = (ii < x0 + dx) | (ii > x1 - dx) | (jj < y0 + dx) | (jj > y1 - dx) | (self.z_agl > top_agl_m - 2 * dx)
+        self.face_idx = np.flatnonzero((inside & edge).ravel())
+        self.plume_idx = [np.intersect1d(pi, self.cell_idx) for pi in self.plume_idx]
+        self.frames_default = np.flatnonzero(self.times <= t_end_s + 1e-6)
+        return self.domain
+
     def restrict_combinations(self, table: np.ndarray):
         """Use only these rate rows for data and physics points (overfit test)."""
         self.q_pool = np.asarray(table, float)
@@ -106,10 +133,13 @@ class TrainSet:
         tables = self.combos if combos == "train" else \
             [D.combination_table(r, "val") for r in self.runs] if combos == "val" else combos
         run = rng.integers(0, len(self.runs), n)
-        frames = np.arange(self.T) if frames is None else np.asarray(frames)
+        if frames is None:
+            frames = np.arange(self.T) if self.frames_default is None else self.frames_default
+        frames = np.asarray(frames)
         it = rng.choice(frames, n)
         u = rng.random(n)
-        cell = rng.integers(0, self.K * self.ny * self.nx, n)
+        cell = rng.integers(0, self.K * self.ny * self.nx, n) if self.cell_idx is None else \
+            rng.choice(self.cell_idx, n)
         cell = np.where(u < p_face, rng.choice(self.face_idx, n), cell)
         q = np.empty((n, len(self.src_xy)))
         c = np.empty(n)

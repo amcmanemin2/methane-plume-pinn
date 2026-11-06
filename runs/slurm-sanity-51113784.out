@@ -1,0 +1,45 @@
+The following modules were not unloaded:
+  (Use "module --force purge" to unload all):
+
+  1) math   2) devel
+name, memory.total [MiB]
+NVIDIA A100-SXM4-80GB, 81920 MiB
+sanity -> /scratch/users/anm49/methane-plume-pinn/runs/20261104-133542_E2_overfit_a_noclip
+  loaded daytime_N: basis 2.06 GB, plume cells 97528/1110000, 81 s
+output bias set from training data: -1.301 (c0 = 2.724e-07 kg/m3)
+step       1  loss 4.924e+00  data 4.924e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 3.08e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 9.99e-04  0.200 s/step
+profile (s/step): {"sample": 0.0, "forward": 0.0145, "backward": 0.0204, "r3": 0.0}  peak GPU mem 2.09 GB
+step     250  loss 2.856e+00  data 2.856e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 4.20e-02  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 7.94e-04  0.035 s/step
+step     500  loss 2.859e+00  data 2.859e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 1.20e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 6.31e-04  0.035 s/step
+  val  rmse 1.567e-06 kg/m3  R2 -0.0000  relL2 0.996  pde(fixed pts) nan
+step     750  loss 2.887e+00  data 2.887e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 4.27e-01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 5.01e-04  0.035 s/step
+step    1000  loss 8.031e+00  data 8.031e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 6.31e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 3.98e-04  0.035 s/step
+  val  rmse 2.233e-06 kg/m3  R2 -1.0311  relL2 1.419  pde(fixed pts) nan
+step    1250  loss 6.399e+00  data 6.399e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 2.94e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 3.16e-04  0.035 s/step
+step    1500  loss 5.887e+00  data 5.887e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 2.06e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 2.51e-04  0.035 s/step
+  val  rmse 1.798e-06 kg/m3  R2 -0.3176  relL2 1.143  pde(fixed pts) nan
+step    1750  loss 5.616e+00  data 5.616e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 1.64e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 2.00e-04  0.035 s/step
+step    2000  loss 5.442e+00  data 5.442e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 1.40e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 1.58e-04  0.034 s/step
+  val  rmse 1.715e-06 kg/m3  R2 -0.1982  relL2 1.090  pde(fixed pts) nan
+step    2250  loss 5.320e+00  data 5.320e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 1.25e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 1.26e-04  0.034 s/step
+step    2500  loss 5.228e+00  data 5.228e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 1.14e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 1.00e-04  0.034 s/step
+  val  rmse 1.679e-06 kg/m3  R2 -0.1482  relL2 1.067  pde(fixed pts) nan
+step    2750  loss 5.157e+00  data 5.157e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 1.06e+01  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 7.94e-05  0.034 s/step
+step    3000  loss 5.100e+00  data 5.100e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 9.95e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 6.31e-05  0.034 s/step
+  val  rmse 1.659e-06 kg/m3  R2 -0.1212  relL2 1.054  pde(fixed pts) nan
+step    3250  loss 5.053e+00  data 5.053e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 9.47e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 5.01e-05  0.034 s/step
+step    3500  loss 5.015e+00  data 5.015e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 9.08e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 3.98e-05  0.034 s/step
+  val  rmse 1.647e-06 kg/m3  R2 -0.1047  relL2 1.047  pde(fixed pts) nan
+step    3750  loss 4.982e+00  data 4.982e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 8.76e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 3.16e-05  0.034 s/step
+step    4000  loss 4.954e+00  data 4.954e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 8.49e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 2.51e-05  0.034 s/step
+  val  rmse 1.638e-06 kg/m3  R2 -0.0938  relL2 1.041  pde(fixed pts) nan
+step    4250  loss 4.931e+00  data 4.931e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 8.27e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 2.00e-05  0.034 s/step
+step    4500  loss 4.910e+00  data 4.910e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 8.08e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 1.58e-05  0.034 s/step
+  val  rmse 1.633e-06 kg/m3  R2 -0.0862  relL2 1.038  pde(fixed pts) nan
+step    4750  loss 4.892e+00  data 4.892e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 7.92e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 1.26e-05  0.034 s/step
+step    5000  loss 4.877e+00  data 4.877e+00  pde 0.000e+00  bc 0.000e+00  ic 0.000e+00  |g| 7.79e+00  K [10.0, 1.0, 10.0, 1.0, 10.0, 1.0]  lr 1.00e-05  0.034 s/step
+  val  rmse 1.629e-06 kg/m3  R2 -0.0808  relL2 1.035  pde(fixed pts) nan
+/home/users/anm49/methane-plume-pinn/src/methane_pinn/plots.py:69: UserWarning: Data has no positive values, and therefore cannot be log-scaled.
+  ax.set_yscale("log")
+  overfit a_data_only: relL2 1.0352  R2 -0.08084  (177 s)
+wrote /scratch/users/anm49/methane-plume-pinn/runs/20261104-133542_E2_overfit_a_noclip/report.json

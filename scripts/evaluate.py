@@ -11,11 +11,14 @@ Writes <run dir>/eval/: metrics_val.csv, metrics_test.csv, eval_<split>_<run>.np
 """
 
 import argparse
+import sys
+from pathlib import Path
 
 import h5py
 import numpy as np
 import torch
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from methane_pinn import data as D
 from methane_pinn import plots as P
 from methane_pinn import runs as R
@@ -39,25 +42,34 @@ def level_slice(les: D.LESRun, frames, q, height):
     return ck * (1 - w) + ck1 * w
 
 
-def maps_for_run(model, run, split, q, args, batch, device, ev_dir):
+def maps_for_run(model, run, split, q, args, batch, device, ev_dir, box=None):
     les = D.LESRun.open(run)
     g = les.grid
     lay = D.sensor_layout(les)
     met = torch.as_tensor(D.sensor_series(les, lay)["met"], device=device)
     frames = np.arange(1, len(g["time"]))
+    xs, ys, topo = g["x"], g["y"], g["topo"]
+    if box is not None:       # sub-domain: its snapshots and its columns only
+        frames = frames[g["time"][frames] <= box["t0"] + box["T"] + 1e-6]
+        ix = np.flatnonzero((xs >= box["x0"]) & (xs <= box["x0"] + box["Lx"]))
+        iy = np.flatnonzero((ys >= box["y0"]) & (ys <= box["y0"] + box["Ly"]))
+        xs, ys, topo = xs[ix], ys[iy], topo[np.ix_(iy, ix)]
     les_f = level_slice(les, frames, q, args.map_height)
-    Xg, Yg = np.meshgrid(g["x"], g["y"])
-    X = torch.as_tensor(np.stack([Xg.ravel(), Yg.ravel(), (g["topo"] + args.map_height).ravel(),
+    if box is not None:
+        les_f = les_f[:, iy][:, :, ix]
+    Xg, Yg = np.meshgrid(xs, ys)
+    X = torch.as_tensor(np.stack([Xg.ravel(), Yg.ravel(), (topo + args.map_height).ravel(),
                                   np.zeros(Xg.size)], -1), dtype=torch.float32, device=device)
     pinn_f = np.empty_like(les_f)
     for jf, it in enumerate(frames):
         X[:, 3] = float(g["time"][it])
         pinn_f[jf] = predict_points(model, X, q, met[it].expand(len(X), -1), batch).reshape(Xg.shape)
     on = np.flatnonzero(q > 0)
-    P.slice_maps(g["x"], g["y"], [les_f[-1], les_f.mean(0)], [pinn_f[-1], pinn_f.mean(0)], g["src_xy"],
+    t_last = (g["time"][frames[-1]] - 3600.0) / 60.0
+    P.slice_maps(xs, ys, [les_f[-1], les_f.mean(0)], [pinn_f[-1], pinn_f.mean(0)], g["src_xy"],
                  ev_dir / f"maps_{split}_{run.name}.png",
-                 [f"{run.name} t = 60 min, {args.map_height:.0f} m AGL",
-                  f"{run.name} release mean, {args.map_height:.0f} m AGL"],
+                 [f"{run.name} t = {t_last:.0f} min, {args.map_height:.0f} m AGL",
+                  f"{run.name} mean of evaluated snapshots, {args.map_height:.0f} m AGL"],
                  sensors_xy=lay.xy, lidar_xy=lay.lidar_xy)
     print(f"maps {split} {run.name}: {len(on)} sources, {q.sum():.0f} kg/h", flush=True)
 
@@ -84,16 +96,23 @@ def main(argv=None):
     batch = ev.get("batch", 262144)
     print(f"{out}: checkpoint step {state['step']}, val points {state['val']}, trained on {trained_on}", flush=True)
     ev_dir = out / "eval"
-    for split in args.splits:
-        if split == "val":
+    scen = state["cfg"].get("scenario")
+    splits = ["scenario"] if scen and args.splits == ["val", "test"] else args.splits
+    for split in splits:
+        combos, box = None, None
+        if split == "scenario":
+            from train import scenario_rates
+            runs, combos, n_combos = [R.get(scen["run"])], scenario_rates(scen)[None], 1
+            box = state["domain"] if scen.get("subdomain") else None
+        elif split == "val":
             runs = [R.get(n) for n in (args.val_runs or trained_on)]
             n_combos = args.n_combos or ev.get("n_combos_val", D.N_COMBOS["val"])
         else:
             runs = [R.get(n) for n in args.test_runs] if args.test_runs else R.runs("test")
             n_combos = args.n_combos or ev.get("n_combos", D.N_COMBOS["test"])
         print(f"[{split}] {[r.name for r in runs]}, {n_combos} combinations, stride {stride}", flush=True)
-        results = [evaluate_run(model, r, n_combos, stride, batch, device, split=split, train_runs=trained_on)
-                   for r in runs]
+        results = [evaluate_run(model, r, n_combos, stride, batch, device, split=split, train_runs=trained_on,
+                                combos=combos, box=box) for r in runs]
         rows = save_results(results, ev_dir, tag=split)
         for row in rows:
             print({k: (round(v, 4) if isinstance(v, float) and abs(v) > 1e-3 else v) for k, v in row.items()})
@@ -101,7 +120,8 @@ def main(argv=None):
         P.sensor_parity(results, ev_dir / f"sensor_parity_{split}.png", title=f"Sensors, 10 m AGL ({split})")
         P.field_parity(results, ev_dir / f"field_parity_{split}.png", title=f"Grid cells ({split})")
         for run in runs:       # maps: first combination of the split, last snapshot and release mean
-            maps_for_run(model, run, split, D.combination_table(run, split)[0], args, batch, device, ev_dir)
+            q = combos[0] if combos is not None else D.combination_table(run, split)[0]
+            maps_for_run(model, run, split, q, args, batch, device, ev_dir, box=box)
     if (out / "losses.csv").exists():
         P.loss_curves(out, ev_dir / "loss_curves.png")
     print(f"wrote {ev_dir}")

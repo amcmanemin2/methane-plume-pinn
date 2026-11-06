@@ -1,0 +1,2 @@
+split,run,stab,bearing,snap_rmse,snap_r2,snap_rel_l2,tmean_rmse,tmean_r2,tmean_rel_l2,sensor_rmse,sensor_r2,far_snap_rel_l2,far_snap_r2,far_tmean_rel_l2,far_tmean_r2,log_snap_med_dlog10,log_snap_within_2x,log_tmean_med_dlog10,log_tmean_within_2x
+scenario,daytime_N,daytime,N,1.22214e-05,-0.150507,1.06984,1.17318e-05,-292.028,16.989,2.17758e-05,-1473.05,4.2888,-17.8998,89.1706,-8386.15,1.30256,0.0356902,1.91312,0.00983975

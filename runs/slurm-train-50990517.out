@@ -1,0 +1,32 @@
+The following modules were not unloaded:
+  (Use "module --force purge" to unload all):
+
+  1) math   2) devel
+name, memory.total [MiB]
+NVIDIA A100-SXM4-40GB, 40960 MiB
+torch      2.4.0a0
+device     cuda: NVIDIA A100-SXM4-40GB
+data root  /oak/stanford/groups/abrandt/anm49/methane-plume-pinn/data  (exists: True)
+run root   /scratch/users/anm49/methane-plume-pinn/runs
+autograd   second-derivative max error 0.00e+00
+run dir    /scratch/users/anm49/methane-plume-pinn/runs/smoke-gpu
+training on 3 runs: ['daytime_N', 'daytime_E', 'daytime_S']
+Unknown option: -C
+usage: git [--version] [--help] [-c name=value]
+           [--exec-path[=<path>]] [--html-path] [--man-path] [--info-path]
+           [-p|--paginate|--no-pager] [--no-replace-objects] [--bare]
+           [--git-dir=<path>] [--work-tree=<path>] [--namespace=<name>]
+           <command> [<args>]
+  loaded daytime_N: basis 2.06 GB, plume cells 97528/1110000, 115 s
+  loaded daytime_E: basis 2.06 GB, plume cells 93884/1110000, 115 s
+  loaded daytime_S: basis 2.06 GB, plume cells 84376/1110000, 117 s
+step       1  loss 1.884e+00  data 1.654e+00  pde 2.298e+01  bc 3.252e-11  ic 9.162e-05  K [[10.0, 1.0], [10.0, 1.0], [10.0, 1.0]]  lr 9.85e-04  1.658 s/step
+step      50  loss 9.762e+00  data 1.287e+00  pde 8.475e+02  bc 8.413e-06  ic 1.267e-08  K [[9.791000366210938, 0.9860000014305115], [10.0, 1.0], [10.0, 1.0]]  lr 4.64e-04  1.141 s/step
+step     100  loss 1.577e+01  data 1.515e+00  pde 1.426e+03  bc 9.978e-06  ic 1.331e-08  K [[9.557999610900879, 0.9639999866485596], [10.0, 1.0], [10.0, 1.0]]  lr 2.15e-04  1.085 s/step
+step     150  loss 2.122e+01  data 2.240e+00  pde 1.898e+03  bc 1.567e-05  ic 4.615e-09  K [[9.454999923706055, 0.953000009059906], [10.0, 1.0], [10.0, 1.0]]  lr 1.00e-04  1.052 s/step
+  val  rmse 1.349e-06 kg/m3  R2 -0.0061  relL2 0.999
+step     200  loss 2.584e+01  data 2.770e+00  pde 2.307e+03  bc 1.414e-05  ic 3.044e-09  K [[9.40999984741211, 0.9480000138282776], [10.0, 1.0], [10.0, 1.0]]  lr 4.64e-05  1.029 s/step
+step     250  loss 2.794e+01  data 1.206e+00  pde 2.674e+03  bc 1.415e-05  ic 2.101e-09  K [[9.390999794006348, 0.9459999799728394], [10.0, 1.0], [10.0, 1.0]]  lr 2.15e-05  1.011 s/step
+step     300  loss 3.189e+01  data 1.861e+00  pde 3.003e+03  bc 1.277e-05  ic 2.114e-09  K [[9.383000373840332, 0.9449999928474426], [10.0, 1.0], [10.0, 1.0]]  lr 1.00e-05  0.998 s/step
+  val  rmse 1.349e-06 kg/m3  R2 -0.0061  relL2 0.999
+{"final_val_rmse": 1.348914874277263e-06, "final_val_r2": -0.006143844027173273}

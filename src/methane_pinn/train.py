@@ -53,13 +53,32 @@ def all_seeds(cfg: dict) -> dict:
                 pde_monitor=PDE_MONITOR_SEED, output_bias=BIAS_SEED, sensors=D.SENSOR_SEED)
 
 
+def K_init_of(phys: dict):
+    """(K_h, K_z) per class in STAB_INDEX order from physics.K_by_class, else K_init for all classes."""
+    by = phys.get("K_by_class")
+    if by:
+        return [list(map(float, by[s])) for s in STAB_INDEX]
+    return list(map(float, phys["K_init"]))
+
+
+@torch.no_grad()
+def plume_mean_c(ts: TrainSet, n=200_000) -> float:
+    """Mean LES c on plume cells of the training data (training runs and combinations only)."""
+    pts = ts.data_points(n, np.random.default_rng(BIAS_SEED), p_plume=1.0, p_face=0.0)
+    return float(pts["c"].clamp(min=0).mean())
+
+
 def build_model(ts: TrainSet, cfg: dict) -> PlumeModel:
+    """PlumeModel from the config. physics.c_ref = auto resolves to plume_mean_c (written back to cfg)."""
     net, phys = cfg["network"], cfg["physics"]
+    if phys.get("c_ref") == "auto":
+        phys["c_ref"] = plume_mean_c(ts)
     out_bias = net.get("out_bias", "auto")
     return PlumeModel(
         ts.domain, ts.terrain, n_src=len(ts.src_xy), n_met=ts.met_t.shape[-1],
         met_mean=ts.met_mean, met_std=ts.met_std, q_max=D.Q_TOTAL_MAX_KGPH,
-        c_ref=phys["c_ref"], n_classes=len(STAB_INDEX), K_init=tuple(phys["K_init"]),
+        c_ref=float(phys["c_ref"]), n_classes=len(STAB_INDEX), K_init=K_init_of(phys),
+        inputs=net.get("inputs", "full"), K_trainable=phys.get("K_trainable", True),
         hidden_size=net["hidden_size"], num_layers=net["num_layers"],
         out_bias=0.0 if out_bias == "auto" else float(out_bias),
     ).to(ts.device)
@@ -68,9 +87,7 @@ def build_model(ts: TrainSet, cfg: dict) -> PlumeModel:
 @torch.no_grad()
 def init_output_bias(model: PlumeModel, ts: TrainSet, n=200_000) -> float:
     """Set the last-layer bias to log(mean LES c on plume cells / c_ref) (training data only)."""
-    pts = ts.data_points(n, np.random.default_rng(BIAS_SEED), p_plume=1.0, p_face=0.0)
-    mean_c = float(pts["c"].clamp(min=0).mean())
-    b = math.log(max(mean_c, 1e-30) / model.c_ref)
+    b = math.log(max(plume_mean_c(ts, n), 1e-30) / model.c_ref)
     model.net.network[-1].bias.fill_(b)
     return b
 
@@ -128,6 +145,16 @@ def balance_weights(model, terms: dict) -> dict:
 # ---------------------------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------------------------
+
+@torch.no_grad()
+def val_metrics(model, ts, pts, batch=65536):
+    """All-cells (PLAN.md), far-field and log-space metrics on a fixed point set."""
+    from methane_pinn.evaluate import far_field_mask, point_metrics
+    pred = torch.cat([model(pts["X"][i:i + batch], pts["q"][i:i + batch], pts["met"][i:i + batch])
+                      for i in range(0, len(pts["c"]), batch)]).cpu().numpy()
+    X = pts["X"].cpu().numpy()
+    return point_metrics(pred, pts["c"].cpu().numpy(), far_field_mask(X[:, 0], X[:, 1], ts.src_xy))
+
 
 @torch.no_grad()
 def evaluate_points(model, pts, batch=65536):
@@ -202,17 +229,25 @@ def train_pinn(ts: TrainSet, cfg: dict, out_dir: Path, log=print, fixed_data=Non
     auto_w = bool(w_cfg.get("auto", False)) and not data_only
     if data_only:
         weights = dict(data=1.0, pde=0.0, bc=0.0, ic=0.0)
+    no_data = not auto_w and weights["data"] == 0.0       # Jia: PDE + ground + IC only
+    best_key = tr.get("best_metric", "all_rmse")          # lower is better
+    info["c_ref"], info["K_init"], info["K_trainable"] = model.c_ref, K_init_of(phys), model.log_K.requires_grad
+    info["no_data_term"], info["best_metric"] = no_data, best_key
+    info["r3"] = bool(tr.get("r3", True))
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    # validation points: in scenario mode the scenario's own LES cells (monitoring only), else val combos
     val = fixed_data if fixed_data is not None else \
-        ts.data_points(tr["n_val_points"], np.random.default_rng(VAL_SEED), combos="val")
+        ts.data_points(tr["n_val_points"], np.random.default_rng(VAL_SEED),
+                       combos="train" if cfg.get("scenario") else "val")
     mon = None if data_only else ts.collocation_points(tr.get("n_pde_monitor", 20000),
                                                        np.random.default_rng(PDE_MONITOR_SEED),
                                                        p_source=tr["p_source"])
     pool = None if data_only else ts.collocation_points(tr["n_collocation"], rng, p_source=tr["p_source"])
 
     losses = {k: [] for k in ("total", *TERMS)} | {"step": [], "val_step": [], "val_rmse": [], "val_r2": [],
-                                                    "val_rel_l2": [], "pde_monitor": []}
+                                                    "val_rel_l2": [], "val_far_rel_l2": [], "val_log_dlog10": [],
+                                                    "pde_monitor": []}
     csv_path = out_dir / "losses.csv"
     K_names = [f"K{a}_{s}" for s in STAB_INDEX for a in ("h", "z")]
     header = ["step", "total", *TERMS, *[f"w{k}_{k}" for k in TERMS], "lr", "grad_norm", *K_names, "s_per_step"]
@@ -231,13 +266,13 @@ def train_pinn(ts: TrainSet, cfg: dict, out_dir: Path, log=print, fixed_data=Non
             torch.cuda.reset_peak_memory_stats()
         opt.zero_grad()
         with timer("sample"):
-            dpts = fixed_data if fixed_data is not None else \
+            dpts = None if no_data else fixed_data if fixed_data is not None else \
                 ts.data_points(tr["n_data"], rng, p_plume=tr["p_plume"], p_face=tr["p_face"])
             if not data_only:
                 gpts = ts.ground_points(tr["n_ground"], rng, tr["p_source"])
                 ipts = ts.initial_points(tr["n_initial"], rng, tr["p_source"])
         with timer("forward"):
-            terms = {"data": data_loss(model, dpts, w_log=w_log)}
+            terms = {"data": zero if no_data else data_loss(model, dpts, w_log=w_log)}
             if not data_only:
                 terms["pde"], r_abs = physics_loss(model, ts, pool, phys)
                 terms["bc"] = boundary_loss(model, ts, gpts, phys)
@@ -256,10 +291,12 @@ def train_pinn(ts: TrainSet, cfg: dict, out_dir: Path, log=print, fixed_data=Non
             opt.step()
         sched.step()
         with timer("r3"):
-            if not data_only:      # R3 resampling (Jia Alg. 3, lines 23-26)
+            if not data_only and tr.get("r3", True):      # R3 resampling (Jia Alg. 3, lines 23-26)
                 keep = r_abs > r_abs.mean()
                 new = ts.collocation_points(int((~keep).sum()), rng, p_source=tr["p_source"])
                 pool = concat(select(pool, keep), new)
+            elif not data_only:                            # r3 = false: a fresh pool every epoch
+                pool = ts.collocation_points(tr["n_collocation"], rng, p_source=tr["p_source"])
 
         vals = {k: float(terms[k]) for k in TERMS}
         tot = float(total)
@@ -287,19 +324,23 @@ def train_pinn(ts: TrainSet, cfg: dict, out_dir: Path, log=print, fixed_data=Non
                 f"{el / step:.3f} s/step", flush=True)
         early = tr.get("early_stop_loss") and tot < tr["early_stop_loss"]
         if step % tr["val_every"] == 0 or step == tr["steps"] or early:
-            m = evaluate_points(model, val)
+            vm = val_metrics(model, ts, val)
+            m = dict(rmse=vm["all_rmse"], r2=vm["all_r2"], rel_l2=vm["all_rel_l2"], **vm)
             pm = float("nan") if mon is None else pde_monitor(model, ts, mon, phys)
             losses["val_step"].append(step)
             for k in ("rmse", "r2", "rel_l2"):
                 losses[f"val_{k}"].append(m[k])
+            losses["val_far_rel_l2"].append(vm["far_rel_l2"])
+            losses["val_log_dlog10"].append(vm["log_median_abs_dlog10"])
             losses["pde_monitor"].append(pm)
             log(f"  val  rmse {m['rmse']:.3e} kg/m3  R2 {m['r2']:.4f}  relL2 {m['rel_l2']:.3f}  "
-                f"pde(fixed pts) {pm:.3e}", flush=True)
+                f"far relL2 {vm['far_rel_l2']:.3f}  med|dlog10| {vm['log_median_abs_dlog10']:.2f}  "
+                f"within2x {vm['log_frac_within_2x']:.0%}  pde(fixed pts) {pm:.3e}", flush=True)
             state = dict(model=model.state_dict(), cfg=cfg, step=step, val=m, info=info,
                          runs=[r.name for r in ts.runs], domain=ts.domain)
             torch.save(state, out_dir / "last.pt")
-            if m["rmse"] < best:
-                best = m["rmse"]
+            if m[best_key] < best:
+                best = m[best_key]
                 torch.save(state, out_dir / "best.pt")
             (out_dir / "losses.json").write_text(json.dumps(losses | {"info": info}))
         if early:

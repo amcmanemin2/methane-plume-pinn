@@ -8,14 +8,18 @@ data/
 *.hdf5
 *.npz
 
-# Run outputs
-runs/
+# Run outputs: runs/ is committed (copied from $SCRATCH/methane-plume-pinn/runs, including
+# checkpoints and Slurm logs); other output locations stay out of git
 outputs/
 checkpoints/
 *.ckpt
 *.pt
-slurm-*.out
+!runs/**/*.pt
+!runs/**/*.npz
 wandb/
+
+# Report drafts (kept locally, not in the repository)
+reports/
 
 # Python
 __pycache__/
